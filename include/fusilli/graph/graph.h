@@ -240,8 +240,9 @@ public:
 
   // ASM emitter driver method.
   //
-  // TODO(#2152): Make this private. It is public for now to aid testing and
-  // debuggability, however the intended user facing API is `Graph::compile()`.
+  // TODO(nod-ai/shark-ai#2152): Make this private. It is public for now to aid
+  // testing and debuggability, however the intended user facing API is
+  // `Graph::compile()`.
   ErrorOr<std::string> emitAsm() {
     FUSILLI_LOG_LABEL_ENDL("INFO: Emitting MLIR assembly for Graph");
     FUSILLI_RETURN_ERROR_IF(
@@ -261,8 +262,9 @@ public:
   // `reCompiled` will be set to true if a value is passed and the cache was
   // (re)generated; this parameter is useful for testing.
   //
-  // TODO(#2152): Make this private. It is public for now to aid testing and
-  // debuggability, however the intended user facing API is `Graph::compile()`.
+  // TODO(nod-ai/shark-ai#2152): Make this private. It is public for now to aid
+  // testing and debuggability, however the intended user facing API is
+  // `Graph::compile()`.
   ErrorOr<std::filesystem::path>
   getCompiledArtifact(const Handle &handle, const std::string &generatedAsm,
                       bool remove, std::optional<bool> *reCompiled = nullptr) {
@@ -312,7 +314,8 @@ private:
     std::vector<std::string> args = {IREE_COMPILE_PATH, input.path};
     auto &flags = kBackendFlags.at(handle.getBackend());
     args.insert(args.end(), flags.begin(), flags.end());
-    // TODO(#2374): Make this conditional (enabled only for testing/debug).
+    // TODO(nod-ai/shark-ai#2374): Make this conditional (enabled only for
+    // testing/debug).
     args.push_back("--iree-scheduling-dump-statistics-format=json");
     args.push_back("--iree-scheduling-dump-statistics-file=" +
                    statistics.path.string());
@@ -370,8 +373,9 @@ private:
     FUSILLI_LOG_ENDL(cmd);
 
     // Run iree-compile.
-    // TODO(#1934): in the error case, std::system will dump to stderr, it would
-    // be great to capture this for better logging + reproducer production.
+    // TODO(nod-ai/shark-ai#1934): in the error case, std::system will dump to
+    // stderr, it would be great to capture this for better logging + reproducer
+    // production.
     int returnCode = std::system(cmd.c_str());
     FUSILLI_RETURN_ERROR_IF(returnCode, ErrorCode::CompileFailure,
                             "iree-compile command failed");
