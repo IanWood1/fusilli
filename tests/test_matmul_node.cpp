@@ -599,3 +599,103 @@ TEST_CASE("MatmulNode with different batch dimensions", "[matmul_node]") {
             std::vector<int64_t>{b1, b2, m, n});
   }
 }
+
+TEST_CASE("MatmulNode batch dimensions must be outermost and non-transposed",
+          "[matmul_node]") {
+  Context ctx;
+  MatmulAttr attr;
+
+  int64_t batch = 8, m = 16, k = 32, n = 64;
+
+  SECTION("Batch dimension not outermost in A") {
+    // A has batch stride smaller than M stride (batch not outermost)
+    auto aT = std::make_shared<TensorAttr>(
+        TensorAttr().setDim({batch, m, k}).setStride({k, batch * k, 1}));
+    auto bT = std::make_shared<TensorAttr>(
+        TensorAttr().setDim({batch, k, n}).setStride({k * n, n, 1}));
+    auto cT = std::make_shared<TensorAttr>();
+
+    attr.setA(aT).setB(bT).setC(cT);
+
+    MatmulNode node(std::move(attr), ctx);
+
+    auto status = node.preValidateNode();
+    REQUIRE(isError(status));
+    REQUIRE(status.getCode() == ErrorCode::InvalidAttribute);
+    REQUIRE(status.getMessage() ==
+            "Matmul input tensor A has batch dimensions that are not outermost "
+            "or are transposed");
+  }
+
+  SECTION("Batch dimension not outermost in B") {
+    auto aT = std::make_shared<TensorAttr>(
+        TensorAttr().setDim({batch, m, k}).setStride({m * k, k, 1}));
+    // B has batch stride smaller than K stride (batch not outermost)
+    auto bT = std::make_shared<TensorAttr>(
+        TensorAttr().setDim({batch, k, n}).setStride({n, batch * n, 1}));
+    auto cT = std::make_shared<TensorAttr>();
+
+    attr.setA(aT).setB(bT).setC(cT);
+
+    MatmulNode node(std::move(attr), ctx);
+
+    auto status = node.preValidateNode();
+    REQUIRE(isError(status));
+    REQUIRE(status.getCode() == ErrorCode::InvalidAttribute);
+    REQUIRE(status.getMessage() ==
+            "Matmul input tensor B has batch dimensions that are not outermost "
+            "or are transposed");
+  }
+
+  SECTION("Transposed batch dimensions in A") {
+    int64_t b1 = 2, b2 = 4;
+
+    // A has transposed batch dims: stride[0] < stride[1]
+    auto aT = std::make_shared<TensorAttr>(
+        TensorAttr()
+            .setDim({b1, b2, m, k})
+            .setStride({m * k, b1 * m * k, k, 1})); // b1 stride < b2 stride
+    auto bT =
+        std::make_shared<TensorAttr>(TensorAttr()
+                                         .setDim({b1, b2, k, n})
+                                         .setStride({b2 * k * n, k * n, n, 1}));
+    auto cT = std::make_shared<TensorAttr>();
+
+    attr.setA(aT).setB(bT).setC(cT);
+
+    MatmulNode node(std::move(attr), ctx);
+
+    auto status = node.preValidateNode();
+    REQUIRE(isError(status));
+    REQUIRE(status.getCode() == ErrorCode::InvalidAttribute);
+    REQUIRE(status.getMessage() ==
+            "Matmul input tensor A has batch dimensions that are not outermost "
+            "or are transposed");
+  }
+
+  SECTION("Transposed batch dimensions in B") {
+    int64_t b1 = 2, b2 = 4;
+
+    auto aT =
+        std::make_shared<TensorAttr>(TensorAttr()
+                                         .setDim({b1, b2, m, k})
+                                         .setStride({b2 * m * k, m * k, k, 1}));
+    // B has transposed batch dims: stride[0] < stride[1]
+    auto bT = std::make_shared<TensorAttr>(
+        TensorAttr()
+            .setDim({b1, b2, k, n})
+            .setStride({k * n, b1 * k * n, n, 1})); // b1 stride < b2 stride
+    auto cT = std::make_shared<TensorAttr>();
+
+    attr.setA(aT).setB(bT).setC(cT);
+
+    MatmulNode node(std::move(attr), ctx);
+
+    auto status = node.preValidateNode();
+    REQUIRE(isError(status));
+    REQUIRE(status.getCode() == ErrorCode::InvalidAttribute);
+    REQUIRE(status.getMessage() ==
+            "Matmul input tensor B has batch dimensions that are not outermost "
+            "or are transposed");
+  }
+}
