@@ -4,7 +4,7 @@
 # See https://llvm.org/LICENSE.txt for license information.
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
-cmake_minimum_required(VERSION 3.28)
+cmake_minimum_required(VERSION 3.24)
 
 # Avoid in-source builds (prevent build artifacts from cluttering the source directory)
 if(CMAKE_SOURCE_DIR STREQUAL CMAKE_BINARY_DIR)
