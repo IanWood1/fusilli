@@ -53,3 +53,15 @@ add_fusilli_samples(
     libutils
     Catch2::Catch2WithMain
 )
+
+add_fusilli_samples(
+  PREFIX fusilli_reduction_samples
+  SRCS
+    reduction/reduction_ops.cpp
+    reduction/reduction_sum_spatial.cpp
+    reduction/reduction_minmax_channel.cpp
+  DEPS
+    libfusilli
+    libutils
+    Catch2::Catch2WithMain
+)

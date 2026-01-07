@@ -34,6 +34,7 @@ add_fusilli_tests(
     test_layernorm_attributes.cpp
     test_matmul_attributes.cpp
     test_pointwise_attributes.cpp
+    test_reduction_attributes.cpp
   DEPS
     libfusilli
     Catch2::Catch2WithMain
@@ -45,6 +46,7 @@ add_fusilli_tests(
     test_conv_node.cpp
     test_matmul_node.cpp
     test_pointwise_node.cpp
+    test_reduction_node.cpp
   DEPS
     libfusilli
     Catch2::Catch2WithMain
@@ -381,6 +383,39 @@ add_fusilli_lit_test(
 add_fusilli_lit_test(
   SRC
     lit/test_matmul_asm_emitter_noncontiguous.cpp
+  DEPS
+    libfusilli
+  TOOLS
+    FileCheck
+    iree-opt
+    iree-compile
+)
+
+add_fusilli_lit_test(
+  SRC
+    lit/test_reduction_asm_emitter_sum.cpp
+  DEPS
+    libfusilli
+  TOOLS
+    FileCheck
+    iree-opt
+    iree-compile
+)
+
+add_fusilli_lit_test(
+  SRC
+    lit/test_reduction_asm_emitter_min.cpp
+  DEPS
+    libfusilli
+  TOOLS
+    FileCheck
+    iree-opt
+    iree-compile
+)
+
+add_fusilli_lit_test(
+  SRC
+    lit/test_reduction_asm_emitter_max.cpp
   DEPS
     libfusilli
   TOOLS
