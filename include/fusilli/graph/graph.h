@@ -7,7 +7,8 @@
 //===----------------------------------------------------------------------===//
 //
 // This file contains definitions for the `Graph` class which derives from the
-// `INode` class (like other nodes).
+// `INode` class (like other nodes) and `GraphCRTP<Graph>` for compile/execute
+// infrastructure.
 //
 //===----------------------------------------------------------------------===//
 
@@ -24,25 +25,18 @@
 #include "fusilli/attributes/types.h"
 #include "fusilli/backend/backend.h"
 #include "fusilli/backend/buffer.h"
-#include "fusilli/backend/compile_command.h"
-#include "fusilli/backend/compile_session.h"
-#include "fusilli/backend/handle.h"
 #include "fusilli/graph/context.h"
+#include "fusilli/graph/graph_base.h"
 #include "fusilli/node/conv_node.h"
 #include "fusilli/node/layernorm_node.h"
 #include "fusilli/node/matmul_node.h"
 #include "fusilli/node/node.h"
 #include "fusilli/node/pointwise_node.h"
 #include "fusilli/node/reduction_node.h"
-#include "fusilli/support/cache.h"
-#include "fusilli/support/external_tools.h"
 #include "fusilli/support/extras.h"
 #include "fusilli/support/logging.h"
 
-#include <cstdlib>
-#include <filesystem>
 #include <memory>
-#include <optional>
 #include <set>
 #include <sstream>
 #include <string>
@@ -51,19 +45,9 @@
 #include <utility>
 #include <vector>
 
-#define IREE_COMPILE_INPUT_FILENAME "iree-compile-input.mlir"
-#define IREE_COMPILE_OUTPUT_FILENAME "iree-compile-output.vmfb"
-#define IREE_COMPILE_COMMAND_FILENAME "iree-compile-command.txt"
-#define IREE_COMPILE_STATISTICS_FILENAME "iree-compile-statistics.json"
-
 namespace fusilli {
 
-inline bool checkCompileBackendEnv() {
-  const char *backend = std::getenv("FUSILLI_COMPILE_BACKEND_USE_CLI");
-  return backend && strcmp(backend, "0") != 0;
-}
-
-class Graph : public INode {
+class Graph : public INode, public GraphCRTP<Graph> {
 public:
   Graph() : INode(Context{}) {}
 
@@ -99,24 +83,9 @@ public:
   // Set `remove = true` to remove compilation artifacts (cache files) when
   // this `Graph` instance goes out of scope.
   ErrorObject compile(const Handle &handle, bool remove = false) {
-    FUSILLI_LOG_LABEL_ENDL("INFO: Compiling Graph");
     FUSILLI_RETURN_ERROR_IF(!isValidated_, ErrorCode::NotValidated,
                             "Graph must be validated before being compiled");
-
-    // Generate MLIR assembly for this graph.
-    FUSILLI_ASSIGN_OR_RETURN(std::string generatedAsm, emitAsm());
-
-    // Compile using IREE compiler or reuse cached artifact.
-    FUSILLI_ASSIGN_OR_RETURN(auto vmfbPath,
-                             getCompiledArtifact(handle, generatedAsm, remove));
-
-    FUSILLI_LOG_LABEL_ENDL("INFO: Compiled Graph cached at \"" +
-                           vmfbPath.string() + "\"");
-
-    // Create per-graph IREE runtime session and load the compiled artifact.
-    FUSILLI_CHECK_ERROR(createPerGraphSession(handle, vmfbPath.string()));
-
-    return ok();
+    return compileImpl(handle, remove);
   }
 
   // Executes the graph using IREE runtime. Requires a `variantPack` which is a
@@ -215,7 +184,9 @@ public:
   execute(const Handle &handle,
           const std::unordered_map<std::shared_ptr<TensorAttr>,
                                    std::shared_ptr<Buffer>> &variantPack,
-          const std::shared_ptr<Buffer> &workspace) const;
+          const std::shared_ptr<Buffer> &workspace = nullptr) const {
+    return executeImpl(handle, variantPack, workspace);
+  }
 
   // Delete copy constructors, keep default move constructor and destructor.
   Graph(const Graph &) = delete;
@@ -280,11 +251,6 @@ public:
   std::shared_ptr<TensorAttr> reduction(const std::shared_ptr<TensorAttr> &x,
                                         ReductionAttr &attributes);
 
-  // Query required workspace buffer size.
-  // Returns std::nullopt if not compiled, 0 if no workspace needed,
-  // or the required size in bytes.
-  std::optional<size_t> getWorkspaceSize() const { return workspaceSize_; }
-
   // ASM emitter driver method.
   //
   // TODO(#13): Make this private. It is public for now to aid testing and
@@ -300,226 +266,20 @@ public:
     return ok(oss.str());
   }
 
-  // Return compiled artifact. The first invocation will always generate
-  // compiled artifact, subsequent invocations may return cached versions
-  // assuming cache invalidation checks pass. Set `remove = true` to remove
-  // cache files when this `Graph` instance goes out of scope.
-  //
-  // `reCompiled` will be set to true if a value is passed and the cache was
-  // (re)generated; this parameter is useful for testing.
-  //
-  // TODO(#13): Make this private. It is public for now to aid testing and
-  // debuggability, however the intended user facing API is `Graph::compile()`.
-  ErrorOr<std::filesystem::path>
-  getCompiledArtifact(const Handle &handle, const std::string &generatedAsm,
-                      bool remove, std::optional<bool> *reCompiled = nullptr) {
-    // Check for cache hit.
-    FUSILLI_ASSIGN_OR_RETURN(bool cacheValid,
-                             validateCache(handle, generatedAsm));
-    if (cacheValid) {
-      if (reCompiled)
-        *reCompiled = false;
-      return ok(cache_->output.path);
-    }
-    // (Re)generate cache.
-    FUSILLI_ASSIGN_OR_RETURN(
-        auto generatedCache,
-        generateCompiledArtifact(handle, generatedAsm, remove));
-    cache_ = std::move(generatedCache);
-    if (reCompiled)
-      *reCompiled = true;
-    return ok(cache_->output.path);
-  }
+  // CRTP interface for GraphCRTP<Graph>.
+  const std::string &getGraphName() const { return getName(); }
 
-  ErrorOr<std::string> readCompilationCacheFile(CachedAssetsType type) {
-    FUSILLI_LOG_LABEL_ENDL("INFO: Getting cached assets path");
-    FUSILLI_RETURN_ERROR_IF(!cache_.has_value(), ErrorCode::FileSystemFailure,
-                            "Cache not populated yet");
+  ErrorOr<std::string> getAsm() { return emitAsm(); }
 
-    // `CacheFile::read` already returns an `ErrorOr<std::string>`
-    // so don't wrap it in another `ok()` here.
-    switch (type) {
-    case CachedAssetsType::Input:
-      return cache_->input.read();
-    case CachedAssetsType::Command:
-      return cache_->command.read();
-    case CachedAssetsType::Output:
-      return cache_->output.read();
-    case CachedAssetsType::Statistics:
-      return cache_->statistics.read();
-    default:
-      return error(ErrorCode::InvalidAttribute, "Unknown CachedAssetsType");
-    }
-  }
+  // Populates IREE runtime call inputs from the variantPack for Graph.
+  // Outputs first (skipping virtual), then inputs (skipping scalar).
+  // Definition in `fusilli/backend/runtime.h`.
+  ErrorObject populateCallInputs(
+      iree_runtime_call_t &call,
+      const std::unordered_map<std::shared_ptr<TensorAttr>,
+                               std::shared_ptr<Buffer>> &variantPack) const;
 
 private:
-  // Definition in `fusilli/backend/runtime.h`.
-  ErrorObject createPerGraphSession(const Handle &handle,
-                                    const std::string &vmfbPath);
-
-  // Queries the required transient/workspace buffer size from the compiled
-  // module. Returns the size in bytes, or 0 if no transients are needed.
-  // Returns an error if the module requires dynamic transient sizes.
-  // Definition in `fusilli/backend/runtime.h`.
-  ErrorOr<size_t> queryTransientSize();
-
-  // Create compiled artifacts from graph writing results to the cache. Set
-  // `remove = true` to remove cache files when returned `CachedAssets` lifetime
-  // ends.
-  ErrorOr<CachedAssets>
-  generateCompiledArtifact(const Handle &handle,
-                           const std::string &generatedAsm, bool remove) {
-    FUSILLI_LOG_LABEL_ENDL("INFO: Generating compiled artifacts");
-
-    // Create cache files.
-    FUSILLI_ASSIGN_OR_RETURN(auto inputCache,
-                             CacheFile::create(
-                                 /*graphName=*/getName(),
-                                 /*fileName=*/IREE_COMPILE_INPUT_FILENAME,
-                                 /*remove=*/remove));
-    FUSILLI_ASSIGN_OR_RETURN(auto outputCache,
-                             CacheFile::create(
-                                 /*graphName=*/getName(),
-                                 /*fileName=*/IREE_COMPILE_OUTPUT_FILENAME,
-                                 /*remove=*/remove));
-    FUSILLI_ASSIGN_OR_RETURN(auto commandCache,
-                             CacheFile::create(
-                                 /*graphName=*/getName(),
-                                 /*fileName=*/IREE_COMPILE_COMMAND_FILENAME,
-                                 /*remove=*/remove));
-    FUSILLI_ASSIGN_OR_RETURN(auto statisticsCache,
-                             CacheFile::create(
-                                 /*graphName=*/getName(),
-                                 /*fileName=*/IREE_COMPILE_STATISTICS_FILENAME,
-                                 /*remove=*/remove));
-    CachedAssets cache = CachedAssets(
-        /*in=*/std::move(inputCache),
-        /*out=*/std::move(outputCache),
-        /*cmd=*/std::move(commandCache),
-        /*stats=*/std::move(statisticsCache));
-
-    // Write input asm to cache.
-    FUSILLI_CHECK_ERROR(cache.input.write(generatedAsm));
-
-    // determine which implementation to use.
-    if (checkCompileBackendEnv()) {
-      // Use CompileCommand (CLI).
-      CompileCommand cmd = CompileCommand::build(
-          handle, cache.input, cache.output, cache.statistics);
-      FUSILLI_CHECK_ERROR(cmd.writeTo(cache.command));
-      FUSILLI_LOG_LABEL_ENDL("INFO: iree-compile command (CLI)");
-      FUSILLI_LOG_ENDL(cmd.toString());
-      FUSILLI_CHECK_ERROR(cmd.execute());
-    } else {
-      // Use CompileSession (C API) - DEFAULT.
-      FUSILLI_ASSIGN_OR_RETURN(CompileSession session,
-                               CompileSession::build(handle, cache.input,
-                                                     cache.output,
-                                                     cache.statistics));
-      FUSILLI_CHECK_ERROR(session.writeTo(cache.command));
-      FUSILLI_LOG_LABEL_ENDL("INFO: iree-compile command (C API)");
-      FUSILLI_LOG_ENDL(session.toString());
-      FUSILLI_CHECK_ERROR(session.execute());
-    }
-
-    return ok(std::move(cache));
-  }
-
-  // Check for cache validity. Cache should be invalidated if:
-  //  - Cache has not been generated for this instance yet
-  //  - Graph name (and therefore cache path) has changed
-  //  - Generated assembly differs
-  //  - Compile commands have changed
-  //  - Handle/backend (and therefore compile command) has changed
-  ErrorOr<bool> validateCache(const Handle &handle,
-                              const std::string &generatedAsm) {
-    FUSILLI_LOG_LABEL_ENDL("INFO: Validating cache");
-
-    // Check for cache miss if cache hasn't been generated.
-    if (!cache_.has_value()) {
-      FUSILLI_LOG_ENDL("Cache not previously populated.");
-      return ok(false);
-    }
-
-    // Check for cache miss if paths don't match (e.g., if graph name changed).
-    if (cache_->input.path != CacheFile::getPath(
-                                  /*graphName=*/getName(),
-                                  /*fileName=*/IREE_COMPILE_INPUT_FILENAME)) {
-      FUSILLI_LOG_ENDL("Cache input paths differ.");
-      return ok(false);
-    }
-    if (cache_->output.path != CacheFile::getPath(
-                                   /*graphName=*/getName(),
-                                   /*fileName=*/IREE_COMPILE_OUTPUT_FILENAME)) {
-      FUSILLI_LOG_ENDL("Cache output paths differ.");
-      return ok(false);
-    }
-    if (cache_->command.path !=
-        CacheFile::getPath(
-            /*graphName=*/getName(),
-            /*fileName=*/IREE_COMPILE_COMMAND_FILENAME)) {
-      FUSILLI_LOG_ENDL("Cache compile command paths differ.");
-      return ok(false);
-    }
-    if (cache_->statistics.path !=
-        CacheFile::getPath(
-            /*graphName=*/getName(),
-            /*fileName=*/IREE_COMPILE_STATISTICS_FILENAME)) {
-      FUSILLI_LOG_ENDL("Cache compile statistics paths differ.");
-      return ok(false);
-    }
-
-    // Open expected files.
-    FUSILLI_ASSIGN_OR_RETURN(CacheFile input,
-                             CacheFile::open(
-                                 /*graphName=*/getName(),
-                                 /*fileName=*/IREE_COMPILE_INPUT_FILENAME));
-    FUSILLI_ASSIGN_OR_RETURN(CacheFile output,
-                             CacheFile::open(
-                                 /*graphName=*/getName(),
-                                 /*fileName=*/IREE_COMPILE_OUTPUT_FILENAME));
-    FUSILLI_ASSIGN_OR_RETURN(CacheFile command,
-                             CacheFile::open(
-                                 /*graphName=*/getName(),
-                                 /*fileName=*/IREE_COMPILE_COMMAND_FILENAME));
-    FUSILLI_ASSIGN_OR_RETURN(
-        CacheFile statistics,
-        CacheFile::open(
-            /*graphName=*/getName(),
-            /*fileName=*/IREE_COMPILE_STATISTICS_FILENAME));
-
-    // Check for a cache miss on generated assembly.
-    FUSILLI_ASSIGN_OR_RETURN(std::string inputContents, input.read());
-    if (inputContents != generatedAsm) {
-      FUSILLI_LOG_ENDL("Generated assembly does not match");
-      return ok(false);
-    }
-
-    // Check for a cache miss on compile command.
-    std::string cmdString;
-
-    if (checkCompileBackendEnv()) {
-      // Use CompileCommand (CLI).
-      CompileCommand cmd =
-          CompileCommand::build(handle, input, output, statistics);
-      cmdString = cmd.toString();
-    } else {
-      // Use CompileSession (C API) - DEFAULT.
-      FUSILLI_ASSIGN_OR_RETURN(
-          auto session,
-          CompileSession::build(handle, input, output, statistics));
-      cmdString = session.toString();
-    }
-
-    FUSILLI_ASSIGN_OR_RETURN(std::string commandContents, command.read());
-    if (commandContents != cmdString) {
-      FUSILLI_LOG_ENDL("Compile command does not match");
-      return ok(false);
-    }
-
-    return ok(true);
-  }
-
   std::shared_ptr<TensorAttr> outputTensor(const std::string &name) {
     FUSILLI_LOG_LABEL_ENDL("INFO: Adding output tensor '"
                            << name << "' to Graph outputs");
@@ -574,22 +334,6 @@ private:
 
   // This is set after `validate()` is run at least once successfully.
   bool isValidated_ = false;
-
-  // Required workspace buffer size in bytes. Set during createPerGraphSession()
-  // by querying the iree.abi.transients.size.constant attribute.
-  // std::nullopt indicates the graph has not been compiled yet.
-  std::optional<size_t> workspaceSize_ = std::nullopt;
-
-  // IREE runtime session lifetime managed by the `Graph` object
-  // (deleted when the `Graph` object goes out of scope).
-  IreeRuntimeSessionUniquePtrType session_;
-
-  // Cache set by `getCompiledArtifact()`.
-  //
-  // Note: new instances should always re-generate cache even if the results
-  // could be read from the file system. Old results may have been generated
-  // with a different version of IREE, it would not be safe to use them.
-  std::optional<CachedAssets> cache_ = std::nullopt;
 
   // This is safe for post-insertion updates of TensorAttr (e.g. setting name
   // or other properties) since it uses the pointer value itself for hashing.

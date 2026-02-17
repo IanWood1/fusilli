@@ -22,8 +22,9 @@
 //    HAL device) created. Graphs running on the same physical devices should
 //    reuse the same handle (hence logical HAL device). The device is released
 //    when the handle holding it goes out of scope.
-//  - `Graph` manages IREE runtime session lifetime. A session holds state on
-//    the HAL device and the loaded VM modules.
+//  - `Graph` / `CustomGraph` manage IREE runtime session lifetime via
+//    `GraphCRTP`. A session holds state on the HAL device and the loaded VM
+//    modules.
 //  - `Buffer` manages IREE HAL buffer view lifetime. The buffer view is
 //    released when the `Buffer` object holding it goes out of scope.
 //
@@ -36,6 +37,7 @@
 #include "fusilli/backend/backend.h"
 #include "fusilli/backend/buffer.h"
 #include "fusilli/backend/handle.h"
+#include "fusilli/graph/custom_graph.h"
 #include "fusilli/graph/graph.h"
 #include "fusilli/support/logging.h"
 
@@ -163,13 +165,15 @@ inline ErrorObject Handle::createAMDGPUDevice(int deviceId, uintptr_t stream) {
 
 //===----------------------------------------------------------------------===//
 //
-// Graph Runtime API Methods
+// GraphCRTP Runtime API Methods
 //
 //===----------------------------------------------------------------------===//
 
 // Create IREE runtime session for this graph and load the compiled artifact.
-inline ErrorObject Graph::createPerGraphSession(const Handle &handle,
-                                                const std::string &vmfbPath) {
+template <typename Derived>
+inline ErrorObject
+GraphCRTP<Derived>::createPerGraphSession(const Handle &handle,
+                                          const std::string &vmfbPath) {
   // Create a session even if one was created earlier, since the handle
   // (hence device) might have changed and we might be re-compiling the graph
   // for the new device.
@@ -204,15 +208,26 @@ inline ErrorObject Graph::createPerGraphSession(const Handle &handle,
 // for the constant workspace size case, or an "iree.abi.transients.size"
 // function for the data-dependent workspace size case. Only the former is
 // supported by Fusilli at the moment.
-inline ErrorOr<size_t> Graph::queryTransientSize() {
+template <typename Derived>
+inline ErrorOr<size_t> GraphCRTP<Derived>::queryTransientSize() {
   // Always resolve the async function for attribute queries. The
   // iree.abi.transients.size.constant attribute is stored in the
   // iree.reflection dict on the @main$async entry point. The sync wrapper
   // @main is auto-generated and does not carry reflection attributes.
   iree_vm_context_t *context = iree_runtime_session_context(session_.get());
   iree_vm_function_t mainFunc;
-  FUSILLI_CHECK_ERROR(iree_vm_context_resolve_function(
-      context, iree_make_cstring_view("module.main$async"), &mainFunc));
+  iree_status_t resolveStatus = iree_vm_context_resolve_function(
+      context, iree_make_cstring_view("module.main$async"), &mainFunc);
+  if (!iree_status_is_ok(resolveStatus)) {
+    // No $async entry point — no workspace needed. The transient size
+    // attribute only lives on @main$async (CustomGraph user MLIR won't have
+    // it).
+    iree_status_ignore(resolveStatus);
+    hasAsyncEntryPoint_ = false;
+    FUSILLI_LOG_LABEL_ENDL("INFO: No workspace allocation required");
+    return ok(static_cast<size_t>(0));
+  }
+  hasAsyncEntryPoint_ = true;
 
   // First check for constant transient size attribute.
   iree_string_view_t sizeAttr = iree_vm_function_lookup_attr_by_name(
@@ -244,20 +259,19 @@ inline ErrorOr<size_t> Graph::queryTransientSize() {
   return ok(static_cast<size_t>(0));
 }
 
-// Executes the graph using IREE runtime. Requires a `variantPack` which is a
-// map from `TensorAttr` to `Buffer` wrapping the `iree_hal_buffer_view_t *`.
-// The `workspace` parameter provides transient storage for intermediate values
-// when required by the compiled module.
+// Executes the graph using IREE runtime. Delegates to
+// self().populateCallInputs() for buffer pushing.
 //
 // TODO(#15): Memoize `iree_runtime_call_t` initialization and populate buffer
-// views at setup to avoid paying the penalty for every `Graph::execute`
-// invocation. Use `iree_runtime_call_reset` to reset the call inputs/outputs
-// if needed.
-inline ErrorObject
-Graph::execute(const Handle &handle,
-               const std::unordered_map<std::shared_ptr<TensorAttr>,
-                                        std::shared_ptr<Buffer>> &variantPack,
-               const std::shared_ptr<Buffer> &workspace) const {
+// views at setup to avoid paying the penalty for every execute invocation.
+// Use `iree_runtime_call_reset` to reset the call inputs/outputs if needed.
+template <typename Derived>
+inline ErrorObject GraphCRTP<Derived>::executeImpl(
+    const Handle &handle,
+    const std::unordered_map<std::shared_ptr<TensorAttr>,
+                             std::shared_ptr<Buffer>> &variantPack,
+    const std::shared_ptr<Buffer> &workspace,
+    std::vector<Buffer> *outputs) const {
   FUSILLI_LOG_LABEL_ENDL("INFO: Executing Graph");
   FUSILLI_RETURN_ERROR_IF(session_ == nullptr, ErrorCode::NotCompiled,
                           "Graph must be compiled before being executed");
@@ -267,15 +281,108 @@ Graph::execute(const Handle &handle,
                        "Graph::execute got an unknown backend");
   bool executeAsync = kBackendExecuteAsync.at(handle.getBackend());
 
-  // Call `module.main` for synchronous execution and `module.main$async` for
-  // asynchronous execution.
+  // Use $async when the backend wants async and the module has it.
+  bool useAsync = executeAsync && hasAsyncEntryPoint_;
   iree_runtime_call_t call;
   FUSILLI_CHECK_ERROR(iree_runtime_call_initialize_by_name(
       session_.get(),
-      iree_make_cstring_view(executeAsync ? "module.main$async"
-                                          : "module.main"),
+      iree_make_cstring_view(useAsync ? "module.main$async" : "module.main"),
       &call));
+  if (!useAsync)
+    executeAsync = false;
 
+  // Delegate buffer population to the derived class.
+  FUSILLI_CHECK_ERROR(self().populateCallInputs(call, variantPack));
+
+  // Push workspace buffer when the module was compiled with
+  // --iree-torch-externalize-transients (indicated by hasAsyncEntryPoint_).
+  if (hasAsyncEntryPoint_) {
+    if (workspaceSize_.value_or(0) > 0) {
+      FUSILLI_RETURN_ERROR_IF(
+          workspace == nullptr, ErrorCode::InvalidArgument,
+          "Workspace buffer required but not provided (size=" +
+              std::to_string(*workspaceSize_) + " bytes)");
+      iree_hal_buffer_t *halBuffer = iree_hal_buffer_view_buffer(*workspace);
+      FUSILLI_RETURN_ERROR_IF(
+          iree_hal_buffer_byte_length(halBuffer) < *workspaceSize_,
+          ErrorCode::InvalidArgument,
+          "Workspace buffer too small: provided " +
+              std::to_string(iree_hal_buffer_byte_length(halBuffer)) +
+              " bytes, required " + std::to_string(*workspaceSize_) + " bytes");
+      iree_vm_ref_t bufferRef = iree_hal_buffer_retain_ref(halBuffer);
+      FUSILLI_CHECK_ERROR(iree_vm_list_push_ref_move(call.inputs, &bufferRef));
+    } else {
+      // Size is 0 - no workspace needed. Accept (and ignore) a non-null
+      // workspace buffer for caller convenience.
+      if (workspace != nullptr)
+        FUSILLI_LOG_LABEL_ENDL("WARNING: Workspace buffer provided but not "
+                               "needed (size=0), ignoring");
+      // Push a null ref to satisfy IREE function signature.
+      iree_vm_ref_t nullRef = iree_vm_ref_null();
+      FUSILLI_CHECK_ERROR(iree_vm_list_push_ref_move(call.inputs, &nullRef));
+    }
+  }
+
+  // The $async entry point expects two additional hal.fence arguments for
+  // async synchronization. These are only pushed when actually using the
+  // $async path (AMDGPU). The sync @main wrapper does not have fences.
+  if (executeAsync) {
+    constexpr iree_host_size_t kDummyFenceCapacity = 0;
+    // Create dummy wait fence (tells generated function that inputs are ready)
+    // that's already completed.
+    {
+      iree_hal_fence_t *waitFence;
+      FUSILLI_CHECK_ERROR(iree_hal_fence_create(
+          kDummyFenceCapacity, iree_allocator_system(), &waitFence));
+
+      iree_vm_ref_t waitFenceRef = iree_hal_fence_move_ref(waitFence);
+      FUSILLI_CHECK_ERROR(
+          iree_vm_list_push_ref_move(call.inputs, &waitFenceRef));
+    }
+    // Create dummy signal fence (tells downstream consumers that kernel has
+    // ran) that's already completed.
+    {
+      iree_hal_fence_t *signalFence;
+      FUSILLI_CHECK_ERROR(iree_hal_fence_create(
+          kDummyFenceCapacity, iree_allocator_system(), &signalFence));
+
+      iree_vm_ref_t signalFenceRef = iree_hal_fence_move_ref(signalFence);
+      FUSILLI_CHECK_ERROR(
+          iree_vm_list_push_ref_move(call.inputs, &signalFenceRef));
+    }
+  }
+
+  // Invoke call.
+  FUSILLI_CHECK_ERROR(iree_runtime_call_invoke(&call, /*flags=*/0));
+
+  // Extract output buffer views from the call results. In the sync execution
+  // path, the IREE function returns outputs as return values rather than
+  // writing into pre-allocated argument buffers.
+  if (outputs) {
+    iree_hal_buffer_view_t *outputView = nullptr;
+    while (iree_status_is_ok(
+        iree_runtime_call_outputs_pop_front_buffer_view(&call, &outputView))) {
+      FUSILLI_ASSIGN_OR_RETURN(Buffer buf, Buffer::import(outputView));
+      // import() retains the view; pop transfers ownership, so release once.
+      iree_hal_buffer_view_release(outputView);
+      outputs->push_back(std::move(buf));
+    }
+  }
+
+  iree_runtime_call_deinitialize(&call);
+  return ok();
+}
+
+//===----------------------------------------------------------------------===//
+//
+// Graph::populateCallInputs — outputs first, then inputs
+//
+//===----------------------------------------------------------------------===//
+
+inline ErrorObject Graph::populateCallInputs(
+    iree_runtime_call_t &call,
+    const std::unordered_map<std::shared_ptr<TensorAttr>,
+                             std::shared_ptr<Buffer>> &variantPack) const {
   // Populate output buffers.
   for (const auto &output : fullGraphOutputsSorted_) {
     // Virtual tensors are internal to the function (intermediate outputs) and
@@ -310,71 +417,34 @@ Graph::execute(const Handle &handle,
         &call, *(variantPack.at(input))));
   }
 
-  // Push workspace buffer. The --iree-torch-externalize-transients flag always
-  // adds a !hal.buffer argument to the generated function signature, even when
-  // no transient storage is needed (size = 0). We must always push a buffer
-  // (or null ref when size = 0) to satisfy the function signature.
-  if (workspaceSize_.value_or(0) > 0) {
-    FUSILLI_RETURN_ERROR_IF(
-        workspace == nullptr, ErrorCode::InvalidArgument,
-        "Workspace buffer required but not provided (size=" +
-            std::to_string(*workspaceSize_) + " bytes)");
-    iree_hal_buffer_t *halBuffer = iree_hal_buffer_view_buffer(*workspace);
-    FUSILLI_RETURN_ERROR_IF(
-        iree_hal_buffer_byte_length(halBuffer) < *workspaceSize_,
-        ErrorCode::InvalidArgument,
-        "Workspace buffer too small: provided " +
-            std::to_string(iree_hal_buffer_byte_length(halBuffer)) +
-            " bytes, required " + std::to_string(*workspaceSize_) + " bytes");
-    iree_vm_ref_t bufferRef = iree_hal_buffer_retain_ref(halBuffer);
-    FUSILLI_CHECK_ERROR(iree_vm_list_push_ref_move(call.inputs, &bufferRef));
-  } else {
-    // Size is 0 - no workspace needed. Accept (and ignore) a non-null
-    // workspace buffer for caller convenience.
-    if (workspace != nullptr)
-      FUSILLI_LOG_LABEL_ENDL("WARNING: Workspace buffer provided but not "
-                             "needed (size=0), ignoring");
-    // Push a null ref to satisfy IREE function signature
-    iree_vm_ref_t nullRef = iree_vm_ref_null();
-    FUSILLI_CHECK_ERROR(iree_vm_list_push_ref_move(call.inputs, &nullRef));
-  }
-
-  // In the asynchronous case, the IREE generated `@main$async` function
-  // expects two additional `hal.fence` arguments. Since we rely on
-  // stream-ordered synchronization, the fences may be dummy just to
-  // align with the function signature without doing anything useful.
-  if (executeAsync) {
-    constexpr iree_host_size_t kDummyFenceCapacity = 0;
-    // Create dummy wait fence (tells generated function that inputs are ready)
-    // that's already completed.
-    {
-      iree_hal_fence_t *waitFence;
-      FUSILLI_CHECK_ERROR(iree_hal_fence_create(
-          kDummyFenceCapacity, iree_allocator_system(), &waitFence));
-
-      iree_vm_ref_t waitFenceRef = iree_hal_fence_move_ref(waitFence);
-      FUSILLI_CHECK_ERROR(
-          iree_vm_list_push_ref_move(call.inputs, &waitFenceRef));
-    }
-    // Create dummy signal fence (tells downstream consumers that kernel has
-    // ran) that's already completed.
-    {
-      iree_hal_fence_t *signalFence;
-      FUSILLI_CHECK_ERROR(iree_hal_fence_create(
-          kDummyFenceCapacity, iree_allocator_system(), &signalFence));
-
-      iree_vm_ref_t signalFenceRef = iree_hal_fence_move_ref(signalFence);
-      FUSILLI_CHECK_ERROR(
-          iree_vm_list_push_ref_move(call.inputs, &signalFenceRef));
-    }
-  }
-
-  // Invoke call.
-  FUSILLI_CHECK_ERROR(iree_runtime_call_invoke(&call, /*flags=*/0));
-
-  iree_runtime_call_deinitialize(&call);
   return ok();
 }
+
+//===----------------------------------------------------------------------===//
+//
+// CustomGraph::populateCallInputs — sequential in arg order
+//
+//===----------------------------------------------------------------------===//
+
+inline ErrorObject CustomGraph::populateCallInputs(
+    iree_runtime_call_t &call,
+    const std::unordered_map<std::shared_ptr<TensorAttr>,
+                             std::shared_ptr<Buffer>> &variantPack) const {
+  for (const auto &arg : args_) {
+    FUSILLI_RETURN_ERROR_IF(!variantPack.contains(arg),
+                            ErrorCode::VariantPackError,
+                            "Argument tensor missing from variantPack");
+    FUSILLI_CHECK_ERROR(iree_runtime_call_inputs_push_back_buffer_view(
+        &call, *(variantPack.at(arg))));
+  }
+  return ok();
+}
+
+//===----------------------------------------------------------------------===//
+//
+// Buffer Runtime API Methods
+//
+//===----------------------------------------------------------------------===//
 
 // Factory: Allocates a new buffer view and takes ownership.
 template <typename T>
@@ -426,12 +496,6 @@ Buffer::allocate(const Handle &handle,
 
   return ok(Buffer(IreeHalBufferViewUniquePtrType(rawBufferView)));
 }
-
-//===----------------------------------------------------------------------===//
-//
-// Buffer Runtime API Methods
-//
-//===----------------------------------------------------------------------===//
 
 // Factory: Imports an existing buffer view and retains ownership.
 inline ErrorOr<Buffer>

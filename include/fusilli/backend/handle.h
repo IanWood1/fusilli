@@ -118,9 +118,11 @@ public:
   Handle &operator=(Handle &&) noexcept = default;
   ~Handle() = default;
 
-  // Allow Graph, Buffer, and CompileCommand objects to access private Handle
-  // methods namely `getDevice()`, `getInstance()`, and `getBackend()`.
+  // Allow Graph, GraphCRTP, Buffer, and CompileCommand objects to access
+  // private Handle methods namely `getDevice()`, `getInstance()`, and
+  // `getBackend()`.
   friend class Graph;
+  template <typename> friend class GraphCRTP;
   friend class Buffer;
   friend class CompileCommand;
   friend class CompileContext;

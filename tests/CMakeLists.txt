@@ -62,6 +62,7 @@ add_fusilli_tests(
   SRCS
     test_graph.cpp
     test_context.cpp
+    test_custom_graph.cpp
   DEPS
     libfusilli
     libutils
