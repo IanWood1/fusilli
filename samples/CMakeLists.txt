@@ -14,6 +14,10 @@ target_link_libraries(libsdpautils PUBLIC
 )
 fusilli_enable_clang_tidy(libsdpautils)
 
+# Shared RoPE test utilities (header-only).
+add_library(libropeutils INTERFACE)
+target_include_directories(libropeutils INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/custom_op)
+
 add_fusilli_samples(
   PREFIX fusilli_conv_samples
   SRCS
@@ -120,9 +124,11 @@ add_fusilli_samples(
   PREFIX fusilli_custom_op_samples
   SRCS
     custom_op/custom_op_add.cpp
+    custom_op/rope.cpp
   DEPS
     libfusilli
     libutils
+    libropeutils
     Catch2::Catch2WithMain
 )
 

@@ -74,9 +74,11 @@ add_fusilli_tests(
     test_graph.cpp
     test_context.cpp
     test_custom_op.cpp
+    test_rope.cpp
   DEPS
     libfusilli
     libutils
+    libropeutils
     Catch2::Catch2WithMain)
 
 add_fusilli_tests(
@@ -205,6 +207,7 @@ add_fusilli_lit_tests(
     lit/test_custom_op_asm_emitter_sdpa.cpp
     lit/test_custom_op_asm_emitter_static.cpp
     lit/test_custom_op_asm_emitter_dim_placeholder.cpp
+    lit/test_rope_asm_emitter.cpp
     lit/test_sdpa_asm_emitter_basic_mha.cpp
     lit/test_sdpa_asm_emitter_causal.cpp
     lit/test_sdpa_asm_emitter_with_mask.cpp
