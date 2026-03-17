@@ -30,23 +30,45 @@ public:
 
   // Sets the MLIR function definition for this custom op.
   //
+  // IMPORTANT: The MLIR function must be written in terms of logical
+  // dimensions, not physical (storage) dimensions. The emitter automatically
+  // inserts permute ops around the custom op call to convert between the
+  // physical layout of graph tensors and the logical layout expected by the
+  // custom function. For example, if a tensor has dim={4,8} with transposed
+  // stride={1,4} (physical layout [8,4]), the emitter permutes it to logical
+  // [4,8] before passing it to the custom function. The custom MLIR should
+  // therefore use [4,8], not [8,4].
+  //
   // The string may contain placeholders that are resolved at emission time
   // by `CustomOpNode::resolveMlirPlaceholders()`:
   //
-  //   {FUNC_NAME}   — replaced with the node's unique name (from setName()).
-  //   {IN0_DTYPE}   — replaced with input 0's MLIR element type (e.g., "f32").
-  //   {OUT0_DTYPE}  — replaced with output 0's MLIR element type.
+  //   {FUNC_NAME}    — replaced with the node's unique name (from setName()).
+  //   {IN0_DTYPE}    — replaced with input 0's MLIR element type (e.g., "f32").
+  //   {OUT0_DTYPE}   — replaced with output 0's MLIR element type.
+  //   {IN0_TYPE}     — replaced with input 0's full value tensor type
+  //                     (e.g., "!torch.vtensor<[4,8],f32>").
+  //   {OUT0_TYPE}    — replaced with output 0's full value tensor type.
+  //   {IN0_DIM0}     — replaced with input 0's logical dimension 0 (e.g., "4").
+  //   {OUT0_DIM0}    — replaced with output 0's logical dimension 0.
+  //
+  // All indices are 0-based and generalize to any input/output/dimension count
+  // (e.g., {IN2_TYPE}, {OUT1_DIM3}).
   //
   // Example:
-  //   func.func private @{FUNC_NAME}(%arg0: !torch.vtensor<[?],{IN0_DTYPE}>,
-  //                                    %arg1: !torch.vtensor<[?],{IN1_DTYPE}>)
-  //                                    -> !torch.vtensor<[?],{OUT0_DTYPE}> {
+  //   func.func private @{FUNC_NAME}(%arg0: {IN0_TYPE},
+  //                                    %arg1: {IN1_TYPE})
+  //                                    -> {OUT0_TYPE} {
   //     ...
   //   }
   //
   // If no placeholders are present, the string is emitted verbatim.
   CustomOpAttr &setMlir(const std::string &mlir) {
     mlir_ = mlir;
+    return *this;
+  }
+
+  CustomOpAttr &setNumOutputs(size_t numOutputs) {
+    numOutputs_ = numOutputs;
     return *this;
   }
 
@@ -57,10 +79,6 @@ public:
   const std::string &getMlir() const { return mlir_; }
 
   size_t getNumOutputs() const { return numOutputs_; }
-  CustomOpAttr &setNumOutputs(size_t numOutputs) {
-    numOutputs_ = numOutputs;
-    return *this;
-  }
 
 private:
   std::string name_;

@@ -89,23 +89,9 @@ public:
     return ok();
   }
 
-  // Resolves `{FUNC_NAME}`, `{IN<i>_DTYPE}`, and `{OUT<i>_DTYPE}` placeholders
-  // in the MLIR template using the node's name and tensor data types.
-  std::string resolveMlirPlaceholders() const {
-    std::string mlir = customOpAttr.getMlir();
-    replaceAll(mlir, "{FUNC_NAME}", customOpAttr.getName());
-    for (size_t i = 0; i < inputs.size(); ++i) {
-      const std::string &mlirDtype =
-          kDataTypeToMlirTypeAsm.at(inputs[i]->getDataType());
-      replaceAll(mlir, "{IN" + std::to_string(i) + "_DTYPE}", mlirDtype);
-    }
-    for (size_t i = 0; i < outputs.size(); ++i) {
-      const std::string &mlirDtype =
-          kDataTypeToMlirTypeAsm.at(outputs[i]->getDataType());
-      replaceAll(mlir, "{OUT" + std::to_string(i) + "_DTYPE}", mlirDtype);
-    }
-    return mlir;
-  }
+  // Resolves all placeholders in the MLIR template (definition in
+  // asm_emitter.h alongside the other ASM emission methods).
+  std::string resolveMlirPlaceholders() const;
 
   ErrorObject inferPropertiesNode() override final {
     FUSILLI_LOG_LABEL_ENDL("INFO: Inferring properties for CustomOpNode '"
