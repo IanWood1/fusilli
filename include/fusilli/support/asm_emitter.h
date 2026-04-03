@@ -38,6 +38,7 @@
 #include "fusilli/node/layernorm_node.h"
 #include "fusilli/node/pointwise_node.h"
 #include "fusilli/node/rmsnorm_node.h"
+#include "fusilli/support/asm_utils.h"
 #include "fusilli/support/extras.h"
 
 #include <bit> // C++20
@@ -1535,41 +1536,6 @@ inline ErrorOr<std::string> RmsNormNode::emitNodePreAsm() const {
 //
 //===----------------------------------------------------------------------===//
 
-// Emits MatmulNode's operand names in MLIR assembly format.
-//
-// The unique suffix is included to ensure SSA uniqueness when the same
-// tensor is used by multiple operations.
-inline std::string MatmulNode::getOperandNamesAsm() const {
-  std::string suffix = matmulAttr.getName();
-  return matmulAttr.getA()->getValueNameAsm() + "_" + suffix + "_perm" + ", " +
-         matmulAttr.getB()->getValueNameAsm() + "_" + suffix + "_perm";
-}
-
-// Emits MatmulNode's operand types in MLIR assembly format.
-inline std::string MatmulNode::getOperandTypesAsm() const {
-  return matmulAttr.getA()->getTensorTypeAsm(/*isValueTensor=*/true,
-                                             /*useLogicalDims=*/true) +
-         ", " +
-         matmulAttr.getB()->getTensorTypeAsm(/*isValueTensor=*/true,
-                                             /*useLogicalDims=*/true);
-}
-
-// Emits MatmulNode's result names in MLIR assembly format.
-//
-// The unique suffix and "_perm" are included to ensure SSA uniqueness when
-// the same tensor is used by multiple operations. This intermediate result
-// is then used by the output permute.
-inline std::string MatmulNode::getResultNamesAsm() const {
-  return matmulAttr.getC()->getValueNameAsm() + "_" + matmulAttr.getName() +
-         "_perm";
-}
-
-// Emits MatmulNode's result types in MLIR assembly format.
-inline std::string MatmulNode::getResultTypesAsm() const {
-  return matmulAttr.getC()->getTensorTypeAsm(/*isValueTensor=*/true,
-                                             /*useLogicalDims=*/true);
-}
-
 inline ErrorOr<std::string> MatmulNode::emitNodePreAsm() const {
   constexpr std::string_view schema = R"(
     {0}
@@ -1578,25 +1544,26 @@ inline ErrorOr<std::string> MatmulNode::emitNodePreAsm() const {
     {6}
   )";
 
-  std::string uniqueSSASuffix = matmulAttr.getName();
-  std::string permuteA = getPermuteOpsAsm(matmulAttr.getA(), "permute_A",
-                                          uniqueSSASuffix, /*isInput=*/true);
-  std::string permuteB = getPermuteOpsAsm(matmulAttr.getB(), "permute_B",
-                                          uniqueSSASuffix, /*isInput=*/true);
-  std::string permuteC = getPermuteOpsAsm(matmulAttr.getC(), "permute_C",
-                                          uniqueSSASuffix, /*isInput=*/false);
+  std::string suffix = matmulAttr.getName();
+  auto permuteA =
+      emitPermute(matmulAttr.getA(), "permute_A", suffix, /*isInput=*/true);
+  auto permuteB =
+      emitPermute(matmulAttr.getB(), "permute_B", suffix, /*isInput=*/true);
+  auto permuteC =
+      emitPermute(matmulAttr.getC(), "permute_C", suffix, /*isInput=*/false);
 
-  std::string output = std::format(schema,
-                                   permuteA,             // {0}
-                                   permuteB,             // {1}
-                                   getResultNamesAsm(),  // {2}
-                                   getOperandNamesAsm(), // {3}
-                                   getOperandTypesAsm(), // {4}
-                                   getResultTypesAsm(),  // {5}
-                                   permuteC              // {6}
+  auto [operandNames, operandTypes] =
+      joinOperands({permuteA.value, permuteB.value});
+
+  return std::format(schema,
+                     permuteA.ops,        // {0}
+                     permuteB.ops,        // {1}
+                     permuteC.value.name, // {2}
+                     operandNames,        // {3}
+                     operandTypes,        // {4}
+                     permuteC.value.type, // {5}
+                     permuteC.ops         // {6}
   );
-
-  return output;
 }
 
 //===----------------------------------------------------------------------===//

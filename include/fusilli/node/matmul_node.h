@@ -78,10 +78,6 @@ public:
 
   // ASM emitter methods.
   ErrorOr<std::string> emitNodePreAsm() const override final;
-  std::string getOperandNamesAsm() const;
-  std::string getOperandTypesAsm() const;
-  std::string getResultNamesAsm() const;
-  std::string getResultTypesAsm() const;
 
   const std::string &getName() const override final {
     return matmulAttr.getName();
