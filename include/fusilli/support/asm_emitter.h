@@ -1849,6 +1849,15 @@ inline ErrorOr<std::string> ReductionNode::emitNodePreAsm() const {
   std::string permuteY =
       getLayoutConversionOpsAsm(yT, "permute_Y", suffix, /*isInput=*/false);
 
+  constexpr std::string_view kAbsKeepdimReductionSchema = R"(
+    {0}
+    {1}
+    %abs_{2} = torch.aten.abs {4} : {5} -> {5}
+    %keepdim_{2} = torch.constant.bool true
+    {3}_{2}_perm = {8} %abs_{2}, %reduction_dims_{2}, %keepdim_{2} : {5}, !torch.list<int>, !torch.bool -> {6}
+    {7}
+    )";
+
   constexpr std::string_view kKeepdimReductionSchema = R"(
     {0}
     {1}
@@ -1894,6 +1903,8 @@ inline ErrorOr<std::string> ReductionNode::emitNodePreAsm() const {
     FUSILLI_DECLARE_KEEPDIM_DTYPE_REDUCTION_EMITTER(AVG, torch.aten.mean.dim)
     FUSILLI_DECLARE_KEEPDIM_REDUCTION_EMITTER(MIN, torch.aten.amin)
     FUSILLI_DECLARE_KEEPDIM_REDUCTION_EMITTER(MAX, torch.aten.amax)
+    FUSILLI_DECLARE_REDUCTION_EMITTER(AMAX, kAbsKeepdimReductionSchema,
+                                      torch.aten.amax)
   default:
     return error(ErrorCode::InternalError, "Unsupported reduction mode");
   }

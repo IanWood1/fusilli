@@ -50,7 +50,8 @@ TEST_CASE("Reduction ops", "[reduction][graph]") {
       ReductionAttr::Mode::ADD,
       ReductionAttr::Mode::AVG,
       ReductionAttr::Mode::MIN,
-      ReductionAttr::Mode::MAX);
+      ReductionAttr::Mode::MAX,
+      ReductionAttr::Mode::AMAX);
   // clang-format on
 
 
@@ -137,6 +138,11 @@ TEST_CASE("Reduction ops", "[reduction][graph]") {
         case ReductionAttr::Mode::MAX:
           expectedValue = std::max(expectedValue, xData[inIdx]);
           break;
+        case ReductionAttr::Mode::AMAX: {
+          T absVal = xData[inIdx] < T(0) ? -xData[inIdx] : xData[inIdx];
+          expectedValue = std::max(expectedValue, absVal);
+          break;
+        }
         default:
           break;
         }
@@ -179,6 +185,8 @@ TEST_CASE("Reduction ops", "[reduction][graph]") {
       return std::numeric_limits<T>::max();
     case ReductionAttr::Mode::MAX:
       return std::numeric_limits<T>::lowest();
+    case ReductionAttr::Mode::AMAX:
+      return T(0);
     default:
       return T(0);
     }
