@@ -1891,6 +1891,7 @@ inline ErrorOr<std::string> ReductionNode::emitNodePreAsm() const {
                                                     torch.aten.sum.dim_IntList)
     FUSILLI_DECLARE_KEEPDIM_DTYPE_REDUCTION_EMITTER(ADD,
                                                     torch.aten.sum.dim_IntList)
+    FUSILLI_DECLARE_KEEPDIM_DTYPE_REDUCTION_EMITTER(AVG, torch.aten.mean.dim)
     FUSILLI_DECLARE_KEEPDIM_REDUCTION_EMITTER(MIN, torch.aten.amin)
     FUSILLI_DECLARE_KEEPDIM_REDUCTION_EMITTER(MAX, torch.aten.amax)
   default:

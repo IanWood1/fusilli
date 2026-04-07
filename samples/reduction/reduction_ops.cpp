@@ -48,6 +48,7 @@ TEST_CASE("Reduction ops", "[reduction][graph]") {
   const auto mode = GENERATE(
       ReductionAttr::Mode::SUM,
       ReductionAttr::Mode::ADD,
+      ReductionAttr::Mode::AVG,
       ReductionAttr::Mode::MIN,
       ReductionAttr::Mode::MAX);
   // clang-format on
@@ -127,6 +128,7 @@ TEST_CASE("Reduction ops", "[reduction][graph]") {
         switch (mode) {
         case ReductionAttr::Mode::SUM:
         case ReductionAttr::Mode::ADD:
+        case ReductionAttr::Mode::AVG:
           expectedValue = expectedValue + xData[inIdx];
           break;
         case ReductionAttr::Mode::MIN:
@@ -139,6 +141,15 @@ TEST_CASE("Reduction ops", "[reduction][graph]") {
           break;
         }
       }
+    }
+
+    // Post-process for modes that need it.
+    if (mode == ReductionAttr::Mode::AVG) {
+      int64_t count = 1;
+      for (size_t i = 0; i < xDims.size(); ++i)
+        if (xDims[i] != yDims[i])
+          count *= xDims[i];
+      expectedValue = expectedValue / static_cast<T>(count);
     }
 
     // Read output buffer
@@ -162,6 +173,7 @@ TEST_CASE("Reduction ops", "[reduction][graph]") {
     switch (mode) {
     case ReductionAttr::Mode::SUM:
     case ReductionAttr::Mode::ADD:
+    case ReductionAttr::Mode::AVG:
       return T(0);
     case ReductionAttr::Mode::MIN:
       return std::numeric_limits<T>::max();
@@ -172,8 +184,12 @@ TEST_CASE("Reduction ops", "[reduction][graph]") {
     }
   };
 
+  // Some modes (AVG, NORM) only support floating-point types.
+  bool floatOnly = (mode == ReductionAttr::Mode::AVG);
+
   // int32
-  execute(handle, DataType::Int32, getInitValue.template operator()<int>());
+  if (!floatOnly)
+    execute(handle, DataType::Int32, getInitValue.template operator()<int>());
   // fp16
   execute(handle, DataType::Half, getInitValue.template operator()<half>());
   // fp32
