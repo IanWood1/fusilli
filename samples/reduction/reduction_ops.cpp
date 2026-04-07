@@ -52,7 +52,8 @@ TEST_CASE("Reduction ops", "[reduction][graph]") {
       ReductionAttr::Mode::MIN,
       ReductionAttr::Mode::MAX,
       ReductionAttr::Mode::AMAX,
-      ReductionAttr::Mode::NORM1);
+      ReductionAttr::Mode::NORM1,
+      ReductionAttr::Mode::NORM2);
   // clang-format on
 
 
@@ -149,6 +150,9 @@ TEST_CASE("Reduction ops", "[reduction][graph]") {
           expectedValue = expectedValue + absVal;
           break;
         }
+        case ReductionAttr::Mode::NORM2:
+          expectedValue = expectedValue + xData[inIdx] * xData[inIdx];
+          break;
         default:
           break;
         }
@@ -163,6 +167,9 @@ TEST_CASE("Reduction ops", "[reduction][graph]") {
           count *= xDims[i];
       expectedValue = expectedValue / static_cast<T>(count);
     }
+    if (mode == ReductionAttr::Mode::NORM2)
+      expectedValue =
+          static_cast<T>(std::sqrt(static_cast<float>(expectedValue)));
 
     // Read output buffer
     std::vector<T> result;
@@ -171,10 +178,15 @@ TEST_CASE("Reduction ops", "[reduction][graph]") {
     // Validate output size and check the first value (d0=0, d1=0)
     REQUIRE(result.size() == ySize);
     int64_t checkIdx = d0 * 16 + d1;
-    if constexpr (std::is_floating_point_v<T>)
+    if constexpr (std::is_floating_point_v<T>) {
       REQUIRE(std::abs(result[checkIdx] - expectedValue) < T(0.01));
-    else
+    } else if constexpr (std::is_same_v<T, half>) {
+      float diff = static_cast<float>(result[checkIdx]) -
+                   static_cast<float>(expectedValue);
+      REQUIRE(std::abs(diff) < 1.0f);
+    } else {
       REQUIRE(result[checkIdx] == expectedValue);
+    }
   };
 
   // Create handle for the target backend.
@@ -193,6 +205,7 @@ TEST_CASE("Reduction ops", "[reduction][graph]") {
       return std::numeric_limits<T>::lowest();
     case ReductionAttr::Mode::AMAX:
     case ReductionAttr::Mode::NORM1:
+    case ReductionAttr::Mode::NORM2:
       return T(0);
     default:
       return T(0);
@@ -201,7 +214,8 @@ TEST_CASE("Reduction ops", "[reduction][graph]") {
 
   // Some modes (AVG, NORM) only support floating-point types.
   bool floatOnly =
-      (mode == ReductionAttr::Mode::AVG || mode == ReductionAttr::Mode::NORM1);
+      (mode == ReductionAttr::Mode::AVG || mode == ReductionAttr::Mode::NORM1 ||
+       mode == ReductionAttr::Mode::NORM2);
 
   // int32
   if (!floatOnly)

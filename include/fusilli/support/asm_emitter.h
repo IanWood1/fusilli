@@ -1930,6 +1930,7 @@ inline ErrorOr<std::string> ReductionNode::emitNodePreAsm() const {
     FUSILLI_DECLARE_REDUCTION_EMITTER(AMAX, kAbsKeepdimReductionSchema,
                                       torch.aten.amax)
     FUSILLI_DECLARE_NORM_REDUCTION_EMITTER(NORM1, 1)
+    FUSILLI_DECLARE_NORM_REDUCTION_EMITTER(NORM2, 2)
   default:
     return error(ErrorCode::InternalError, "Unsupported reduction mode");
   }

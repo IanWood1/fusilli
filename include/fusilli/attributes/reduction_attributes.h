@@ -34,7 +34,7 @@ namespace fusilli {
   OP(AMAX)                                                                     \
   OP(AVG)                                                                      \
   OP(NORM1)                                                                    \
-  /* OP(NORM2) */                                                              \
+  OP(NORM2)                                                                    \
   /* OP(MUL_NO_ZEROS) */
 
 class ReductionAttr : public AttributesCRTP<ReductionAttr> {
