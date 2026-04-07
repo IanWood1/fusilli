@@ -202,6 +202,7 @@ add_fusilli_lit_tests(
     lit/test_reduction_asm_emitter_amax.cpp
     lit/test_reduction_asm_emitter_norm1.cpp
     lit/test_reduction_asm_emitter_norm2.cpp
+    lit/test_reduction_asm_emitter_mul.cpp
   DEPS
     libfusilli
     libutils

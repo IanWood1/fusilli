@@ -1931,6 +1931,42 @@ inline ErrorOr<std::string> ReductionNode::emitNodePreAsm() const {
                                       torch.aten.amax)
     FUSILLI_DECLARE_NORM_REDUCTION_EMITTER(NORM1, 1)
     FUSILLI_DECLARE_NORM_REDUCTION_EMITTER(NORM2, 2)
+  case ReductionAttr::Mode::MUL: {
+    // torch.aten.prod.dim_int takes a single int dim, so multi-dim reduction
+    // chains one prod per reduction dimension. With keepdim=true, dims don't
+    // shift between steps.
+    std::ostringstream oss;
+    oss << "\n    " << permuteX;
+
+    auto dims = xT->getDim();
+    DataType dtype = xT->getDataType();
+    std::string prevOperand = getOperandNamesAsm();
+    std::string prevType = getOperandTypesAsm();
+
+    for (size_t i = 0; i < reductionDims.size(); ++i) {
+      int64_t dim = reductionDims[i];
+      std::string step = suffix + "_" + std::to_string(i);
+      dims[dim] = 1;
+      std::string nextType = buildTensorTypeStr(dims, dtype);
+      bool isLast = (i == reductionDims.size() - 1);
+      std::string resultName =
+          isLast ? getResultNamesAsm() + "_" + suffix + "_perm"
+                 : "%prod_" + step;
+
+      oss << std::format(R"(
+    %dim_{0} = torch.constant.int {1}
+    %keepdim_{0} = torch.constant.bool true
+    %dtype_{0} = torch.constant.none
+    {2} = torch.aten.prod.dim_int {3}, %dim_{0}, %keepdim_{0}, %dtype_{0} : {4}, !torch.int, !torch.bool, !torch.none -> {5}
+)",
+                         step, dim, resultName, prevOperand, prevType,
+                         nextType);
+      prevOperand = resultName;
+      prevType = nextType;
+    }
+    oss << "\n    " << permuteY << "\n    ";
+    return oss.str();
+  }
   default:
     return error(ErrorCode::InternalError, "Unsupported reduction mode");
   }

@@ -53,8 +53,10 @@ TEST_CASE("Reduction ops", "[reduction][graph]") {
       ReductionAttr::Mode::MAX,
       ReductionAttr::Mode::AMAX,
       ReductionAttr::Mode::NORM1,
-      ReductionAttr::Mode::NORM2);
+      ReductionAttr::Mode::NORM2,
+      ReductionAttr::Mode::MUL);
   // clang-format on
+
 
 
   auto execute = [&]<typename T>(Handle &handle, DataType dt, T initValue) {
@@ -153,6 +155,9 @@ TEST_CASE("Reduction ops", "[reduction][graph]") {
         case ReductionAttr::Mode::NORM2:
           expectedValue = expectedValue + xData[inIdx] * xData[inIdx];
           break;
+        case ReductionAttr::Mode::MUL:
+          expectedValue = expectedValue * xData[inIdx];
+          break;
         default:
           break;
         }
@@ -207,6 +212,8 @@ TEST_CASE("Reduction ops", "[reduction][graph]") {
     case ReductionAttr::Mode::NORM1:
     case ReductionAttr::Mode::NORM2:
       return T(0);
+    case ReductionAttr::Mode::MUL:
+      return T(1);
     default:
       return T(0);
     }
@@ -216,12 +223,19 @@ TEST_CASE("Reduction ops", "[reduction][graph]") {
   bool floatOnly =
       (mode == ReductionAttr::Mode::AVG || mode == ReductionAttr::Mode::NORM1 ||
        mode == ReductionAttr::Mode::NORM2);
+  // MUL and NORM2 overflow fp16 range with this test data.
+  bool skipHalf =
+      (mode == ReductionAttr::Mode::MUL || mode == ReductionAttr::Mode::NORM2);
+  // MUL overflows fp32 range with this test data (inf * 0 = NaN).
+  bool skipFloat = (mode == ReductionAttr::Mode::MUL);
 
   // int32
   if (!floatOnly)
     execute(handle, DataType::Int32, getInitValue.template operator()<int>());
   // fp16
-  execute(handle, DataType::Half, getInitValue.template operator()<half>());
+  if (!skipHalf)
+    execute(handle, DataType::Half, getInitValue.template operator()<half>());
   // fp32
-  execute(handle, DataType::Float, getInitValue.template operator()<float>());
+  if (!skipFloat)
+    execute(handle, DataType::Float, getInitValue.template operator()<float>());
 }

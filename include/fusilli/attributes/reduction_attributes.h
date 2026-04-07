@@ -28,7 +28,7 @@ namespace fusilli {
   OP(NOT_SET)                                                                  \
   OP(SUM)                                                                      \
   OP(ADD)                                                                      \
-  /* OP(MUL) */                                                                \
+  OP(MUL)                                                                      \
   OP(MIN)                                                                      \
   OP(MAX)                                                                      \
   OP(AMAX)                                                                     \
