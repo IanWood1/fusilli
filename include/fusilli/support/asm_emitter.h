@@ -1849,6 +1849,16 @@ inline ErrorOr<std::string> ReductionNode::emitNodePreAsm() const {
   std::string permuteY =
       getLayoutConversionOpsAsm(yT, "permute_Y", suffix, /*isInput=*/false);
 
+  constexpr std::string_view kNormReductionSchema = R"(
+    {0}
+    {1}
+    %ord_{2} = torch.constant.int {8}
+    %keepdim_{2} = torch.constant.bool true
+    %dtype_{2} = torch.constant.none
+    {3}_{2}_perm = torch.aten.linalg_vector_norm {4}, %ord_{2}, %reduction_dims_{2}, %keepdim_{2}, %dtype_{2} : {5}, !torch.int, !torch.list<int>, !torch.bool, !torch.none -> {6}
+    {7}
+    )";
+
   constexpr std::string_view kAbsKeepdimReductionSchema = R"(
     {0}
     {1}
@@ -1895,6 +1905,20 @@ inline ErrorOr<std::string> ReductionNode::emitNodePreAsm() const {
 #define FUSILLI_DECLARE_KEEPDIM_DTYPE_REDUCTION_EMITTER(MODE, OPIR)            \
   FUSILLI_DECLARE_REDUCTION_EMITTER(MODE, kKeepdimDtypeReductionSchema, OPIR)
 
+#define FUSILLI_DECLARE_NORM_REDUCTION_EMITTER(MODE, ORD)                      \
+  case ReductionAttr::Mode::MODE: {                                            \
+    return std::format(kNormReductionSchema, permuteX, /* {0} */               \
+                       dimListOss.str(),               /* {1} */               \
+                       suffix,                         /* {2} */               \
+                       getResultNamesAsm(),            /* {3} */               \
+                       getOperandNamesAsm(),           /* {4} */               \
+                       getOperandTypesAsm(),           /* {5} */               \
+                       getResultTypesAsm(),            /* {6} */               \
+                       permuteY,                       /* {7} */               \
+                       ORD                             /* {8} */               \
+    );                                                                         \
+  }
+
   switch (reductionAttr.getMode()) {
     FUSILLI_DECLARE_KEEPDIM_DTYPE_REDUCTION_EMITTER(SUM,
                                                     torch.aten.sum.dim_IntList)
@@ -1905,6 +1929,7 @@ inline ErrorOr<std::string> ReductionNode::emitNodePreAsm() const {
     FUSILLI_DECLARE_KEEPDIM_REDUCTION_EMITTER(MAX, torch.aten.amax)
     FUSILLI_DECLARE_REDUCTION_EMITTER(AMAX, kAbsKeepdimReductionSchema,
                                       torch.aten.amax)
+    FUSILLI_DECLARE_NORM_REDUCTION_EMITTER(NORM1, 1)
   default:
     return error(ErrorCode::InternalError, "Unsupported reduction mode");
   }
@@ -1913,6 +1938,7 @@ inline ErrorOr<std::string> ReductionNode::emitNodePreAsm() const {
 #undef FUSILLI_DECLARE_REDUCTION_EMITTER
 #undef FUSILLI_DECLARE_KEEPDIM_REDUCTION_EMITTER
 #undef FUSILLI_DECLARE_KEEPDIM_DTYPE_REDUCTION_EMITTER
+#undef FUSILLI_DECLARE_NORM_REDUCTION_EMITTER
 
 //===----------------------------------------------------------------------===//
 //

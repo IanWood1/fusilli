@@ -33,7 +33,7 @@ namespace fusilli {
   OP(MAX)                                                                      \
   OP(AMAX)                                                                     \
   OP(AVG)                                                                      \
-  /* OP(NORM1) */                                                              \
+  OP(NORM1)                                                                    \
   /* OP(NORM2) */                                                              \
   /* OP(MUL_NO_ZEROS) */
 

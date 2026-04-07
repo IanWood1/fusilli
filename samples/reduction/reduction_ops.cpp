@@ -51,7 +51,8 @@ TEST_CASE("Reduction ops", "[reduction][graph]") {
       ReductionAttr::Mode::AVG,
       ReductionAttr::Mode::MIN,
       ReductionAttr::Mode::MAX,
-      ReductionAttr::Mode::AMAX);
+      ReductionAttr::Mode::AMAX,
+      ReductionAttr::Mode::NORM1);
   // clang-format on
 
 
@@ -143,6 +144,11 @@ TEST_CASE("Reduction ops", "[reduction][graph]") {
           expectedValue = std::max(expectedValue, absVal);
           break;
         }
+        case ReductionAttr::Mode::NORM1: {
+          T absVal = xData[inIdx] < T(0) ? -xData[inIdx] : xData[inIdx];
+          expectedValue = expectedValue + absVal;
+          break;
+        }
         default:
           break;
         }
@@ -186,6 +192,7 @@ TEST_CASE("Reduction ops", "[reduction][graph]") {
     case ReductionAttr::Mode::MAX:
       return std::numeric_limits<T>::lowest();
     case ReductionAttr::Mode::AMAX:
+    case ReductionAttr::Mode::NORM1:
       return T(0);
     default:
       return T(0);
@@ -193,7 +200,8 @@ TEST_CASE("Reduction ops", "[reduction][graph]") {
   };
 
   // Some modes (AVG, NORM) only support floating-point types.
-  bool floatOnly = (mode == ReductionAttr::Mode::AVG);
+  bool floatOnly =
+      (mode == ReductionAttr::Mode::AVG || mode == ReductionAttr::Mode::NORM1);
 
   // int32
   if (!floatOnly)
