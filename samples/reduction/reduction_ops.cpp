@@ -47,9 +47,11 @@ TEST_CASE("Reduction ops", "[reduction][graph]") {
   // clang-format off
   const auto mode = GENERATE(
       ReductionAttr::Mode::SUM,
+      ReductionAttr::Mode::ADD,
       ReductionAttr::Mode::MIN,
       ReductionAttr::Mode::MAX);
   // clang-format on
+
 
   auto execute = [&]<typename T>(Handle &handle, DataType dt, T initValue) {
     // Create graph.
@@ -124,6 +126,7 @@ TEST_CASE("Reduction ops", "[reduction][graph]") {
         int64_t inIdx = ((d0 * 16 + d1) * 8 + d2) * 8 + d3;
         switch (mode) {
         case ReductionAttr::Mode::SUM:
+        case ReductionAttr::Mode::ADD:
           expectedValue = expectedValue + xData[inIdx];
           break;
         case ReductionAttr::Mode::MIN:
@@ -158,6 +161,7 @@ TEST_CASE("Reduction ops", "[reduction][graph]") {
   auto getInitValue = [&]<typename T>() -> T {
     switch (mode) {
     case ReductionAttr::Mode::SUM:
+    case ReductionAttr::Mode::ADD:
       return T(0);
     case ReductionAttr::Mode::MIN:
       return std::numeric_limits<T>::max();

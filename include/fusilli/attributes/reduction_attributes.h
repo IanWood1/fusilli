@@ -27,7 +27,7 @@ namespace fusilli {
 #define FUSILLI_REDUCTION_MODES(OP)                                            \
   OP(NOT_SET)                                                                  \
   OP(SUM)                                                                      \
-  /* OP(ADD) */                                                                \
+  OP(ADD)                                                                      \
   /* OP(MUL) */                                                                \
   OP(MIN)                                                                      \
   OP(MAX)                                                                      \
