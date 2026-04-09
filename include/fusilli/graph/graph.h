@@ -246,6 +246,8 @@ public:
   }
   Type getType() const override final { return Type::Composite; }
 
+  const std::string &getCacheUid() const { return cacheUid_; }
+
   Graph &setName(const std::string &name) {
     context.setName(name);
     return *this;
@@ -405,21 +407,25 @@ private:
     FUSILLI_ASSIGN_OR_RETURN(auto inputCache,
                              CacheFile::create(
                                  /*graphName=*/getName(),
+                                 /*uid=*/getCacheUid(),
                                  /*fileName=*/IREE_COMPILE_INPUT_FILENAME,
                                  /*remove=*/remove));
     FUSILLI_ASSIGN_OR_RETURN(auto outputCache,
                              CacheFile::create(
                                  /*graphName=*/getName(),
+                                 /*uid=*/getCacheUid(),
                                  /*fileName=*/IREE_COMPILE_OUTPUT_FILENAME,
                                  /*remove=*/remove));
     FUSILLI_ASSIGN_OR_RETURN(auto commandCache,
                              CacheFile::create(
                                  /*graphName=*/getName(),
+                                 /*uid=*/getCacheUid(),
                                  /*fileName=*/IREE_COMPILE_COMMAND_FILENAME,
                                  /*remove=*/remove));
     FUSILLI_ASSIGN_OR_RETURN(auto statisticsCache,
                              CacheFile::create(
                                  /*graphName=*/getName(),
+                                 /*uid=*/getCacheUid(),
                                  /*fileName=*/IREE_COMPILE_STATISTICS_FILENAME,
                                  /*remove=*/remove));
     CachedAssets cache = CachedAssets(
@@ -474,12 +480,14 @@ private:
     // Check for cache miss if paths don't match (e.g., if graph name changed).
     if (cache_->input.path != CacheFile::getPath(
                                   /*graphName=*/getName(),
+                                  /*uid=*/getCacheUid(),
                                   /*fileName=*/IREE_COMPILE_INPUT_FILENAME)) {
       FUSILLI_LOG_ENDL("Cache input paths differ.");
       return ok(false);
     }
     if (cache_->output.path != CacheFile::getPath(
                                    /*graphName=*/getName(),
+                                   /*uid=*/getCacheUid(),
                                    /*fileName=*/IREE_COMPILE_OUTPUT_FILENAME)) {
       FUSILLI_LOG_ENDL("Cache output paths differ.");
       return ok(false);
@@ -487,6 +495,7 @@ private:
     if (cache_->command.path !=
         CacheFile::getPath(
             /*graphName=*/getName(),
+            /*uid=*/getCacheUid(),
             /*fileName=*/IREE_COMPILE_COMMAND_FILENAME)) {
       FUSILLI_LOG_ENDL("Cache compile command paths differ.");
       return ok(false);
@@ -494,6 +503,7 @@ private:
     if (cache_->statistics.path !=
         CacheFile::getPath(
             /*graphName=*/getName(),
+            /*uid=*/getCacheUid(),
             /*fileName=*/IREE_COMPILE_STATISTICS_FILENAME)) {
       FUSILLI_LOG_ENDL("Cache compile statistics paths differ.");
       return ok(false);
@@ -503,19 +513,23 @@ private:
     FUSILLI_ASSIGN_OR_RETURN(CacheFile input,
                              CacheFile::open(
                                  /*graphName=*/getName(),
+                                 /*uid=*/getCacheUid(),
                                  /*fileName=*/IREE_COMPILE_INPUT_FILENAME));
     FUSILLI_ASSIGN_OR_RETURN(CacheFile output,
                              CacheFile::open(
                                  /*graphName=*/getName(),
+                                 /*uid=*/getCacheUid(),
                                  /*fileName=*/IREE_COMPILE_OUTPUT_FILENAME));
     FUSILLI_ASSIGN_OR_RETURN(CacheFile command,
                              CacheFile::open(
                                  /*graphName=*/getName(),
+                                 /*uid=*/getCacheUid(),
                                  /*fileName=*/IREE_COMPILE_COMMAND_FILENAME));
     FUSILLI_ASSIGN_OR_RETURN(
         CacheFile statistics,
         CacheFile::open(
             /*graphName=*/getName(),
+            /*uid=*/getCacheUid(),
             /*fileName=*/IREE_COMPILE_STATISTICS_FILENAME));
 
     // Check for a cache miss on generated assembly.
@@ -628,6 +642,11 @@ private:
   // could be read from the file system. Old results may have been generated
   // with a different version of IREE, it would not be safe to use them.
   std::optional<CachedAssets> cache_;
+
+  // Unique identifier for this Graph instance's cache subdirectory.
+  // Ensures each instance writes to its own isolated cache path,
+  // preventing cross-process and cross-instance cache collisions.
+  std::string cacheUid_ = generateCacheUid();
 
   // This is safe for post-insertion updates of TensorAttr (e.g. setting name
   // or other properties) since it uses the pointer value itself for hashing.

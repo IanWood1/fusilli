@@ -22,9 +22,11 @@
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
+#include <format>
 #include <fstream>
 #include <ios>
 #include <iostream>
+#include <random>
 #include <string>
 #include <system_error>
 #include <utility>
@@ -36,6 +38,14 @@
 #endif
 
 namespace fusilli {
+
+// Generate a random 16-character hex string for per-instance cache isolation.
+inline std::string generateCacheUid() {
+  std::random_device rd;
+  uint32_t hi = rd();
+  uint32_t lo = rd();
+  return std::format("{:08x}{:08x}", hi, lo);
+}
 
 // An RAII type for creating + destroying cache files in
 // `${HOME}/.cache/fusilli`.
@@ -72,12 +82,13 @@ public:
   // Factory constructor that creates file, overwriting an existing file, and
   // returns an ErrorObject if file could not be created.
   static ErrorOr<CacheFile> create(const std::string &graphName,
+                                   const std::string &uid,
                                    const std::string &fileName, bool remove) {
-    std::filesystem::path path = CacheFile::getPath(graphName, fileName);
+    std::filesystem::path path = CacheFile::getPath(graphName, uid, fileName);
     FUSILLI_LOG_LABEL_ENDL("INFO: Creating Cache file");
     FUSILLI_LOG_ENDL(path);
 
-    // Create directory: ${HOME}/.cache/fusilli/<graphName>
+    // Create directory: ${HOME}/.cache/fusilli/<graphName>/<uid>
     std::filesystem::path cacheDir = path.parent_path();
     std::error_code ec;
     std::filesystem::create_directories(cacheDir, ec);
@@ -97,8 +108,9 @@ public:
   // Factory constructor that opens an existing file and returns ErrorObject if
   // the file does not exist.
   static ErrorOr<CacheFile> open(const std::string &graphName,
+                                 const std::string &uid,
                                  const std::string &fileName) {
-    std::filesystem::path path = CacheFile::getPath(graphName, fileName);
+    std::filesystem::path path = CacheFile::getPath(graphName, uid, fileName);
 
     // Check if the file exists.
     FUSILLI_RETURN_ERROR_IF(!std::filesystem::exists(path),
@@ -145,11 +157,12 @@ public:
 #endif
   }
 
-  // Utility method to build the path to cache file given `graphName` and
-  // `fileName`.
+  // Utility method to build the path to cache file given `graphName`, `uid`,
+  // and `fileName`.
   //
-  // Format: ${HOME}/.cache/fusilli/<sanitized version of graphName>/<fileName>
+  // Format: ${HOME}/.cache/fusilli/<sanitized graphName>/<uid>/<fileName>
   static std::filesystem::path getPath(const std::string &graphName,
+                                       const std::string &uid,
                                        const std::string &fileName) {
     // Ensure graphName is safe to use as a directory name, we assume fileName
     // is safe.
@@ -166,7 +179,7 @@ public:
       sanitizedGraphName = "unnamed_graph";
 
     std::filesystem::path cacheDir = getCacheDir();
-    return cacheDir / sanitizedGraphName / fileName;
+    return cacheDir / sanitizedGraphName / uid / fileName;
   }
 
   // Move constructors.
@@ -272,14 +285,29 @@ struct CleanupCacheDirectory {
   explicit CleanupCacheDirectory(std::filesystem::path dir)
       : cacheDir(std::move(dir)) {}
 
+  CleanupCacheDirectory(CleanupCacheDirectory &&other) noexcept
+      : cacheDir(std::move(other.cacheDir)) {}
+
+  // Delete copy — directory ownership must transfer, not duplicate.
+  CleanupCacheDirectory(const CleanupCacheDirectory &) = delete;
+  CleanupCacheDirectory &operator=(const CleanupCacheDirectory &) = delete;
+  CleanupCacheDirectory &operator=(CleanupCacheDirectory &&) = delete;
+
   ~CleanupCacheDirectory() {
     // This likely indicates the instance in question has been moved from.
     if (cacheDir.empty())
       return;
 
+    // Remove the uid directory if empty.
     if (std::filesystem::exists(cacheDir) &&
         std::filesystem::is_empty(cacheDir))
       std::filesystem::remove(cacheDir);
+
+    // Also remove the parent graph-name directory if it is now empty.
+    std::filesystem::path graphDir = cacheDir.parent_path();
+    if (!graphDir.empty() && std::filesystem::exists(graphDir) &&
+        std::filesystem::is_empty(graphDir))
+      std::filesystem::remove(graphDir);
   }
 };
 
@@ -311,10 +339,41 @@ struct CachedAssets : CleanupCacheDirectory {
     assert(std::filesystem::is_directory(input.path.parent_path()));
   }
 
-  // Default move constructors + destructor.
   CachedAssets(CachedAssets &&) noexcept = default;
-  CachedAssets &operator=(CachedAssets &&) noexcept = default;
   ~CachedAssets() = default;
+
+  // Custom move-assignment: move members FIRST so CacheFile::operator= removes
+  // old files, then clean up the now-empty old directory before updating
+  // cacheDir. The default operator= would process the base (cacheDir) before
+  // members, leaking the old directory when the graph name changes.
+  CachedAssets &operator=(CachedAssets &&other) noexcept {
+    if (this == &other)
+      return *this;
+
+    std::filesystem::path oldDir = cacheDir;
+
+    // Move members first — CacheFile::operator= removes old files when paths
+    // differ (e.g., graph name changed).
+    input = std::move(other.input);
+    output = std::move(other.output);
+    command = std::move(other.command);
+    statistics = std::move(other.statistics);
+
+    // Update cacheDir to the new directory.
+    cacheDir = std::move(other.cacheDir);
+
+    // Clean up old directory if it became empty and differs from the new one.
+    if (!oldDir.empty() && oldDir != cacheDir) {
+      if (std::filesystem::exists(oldDir) && std::filesystem::is_empty(oldDir))
+        std::filesystem::remove(oldDir);
+      std::filesystem::path graphDir = oldDir.parent_path();
+      if (!graphDir.empty() && std::filesystem::exists(graphDir) &&
+          std::filesystem::is_empty(graphDir))
+        std::filesystem::remove(graphDir);
+    }
+
+    return *this;
+  }
 
   // Delete copy constructors.
   CachedAssets(const CachedAssets &) = delete;

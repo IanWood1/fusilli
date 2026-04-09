@@ -23,6 +23,7 @@
 using namespace fusilli;
 
 static std::string kGraphName = "test_compile_session";
+static std::string kTestUid = "test_uid";
 
 // Returns the path to a shared tuning spec file for tests. The file is created
 // once and persists for the process lifetime because IREE caches parsed tuning
@@ -186,14 +187,15 @@ TEST_CASE("CompileSession::compile with valid MLIR",
   // Create temporary cache files.
   FUSILLI_REQUIRE_ASSIGN(
       CacheFile input,
-      CacheFile::create(kGraphName, "input.mlir", /*remove=*/true));
+      CacheFile::create(kGraphName, kTestUid, "input.mlir", /*remove=*/true));
   FUSILLI_REQUIRE_ASSIGN(
       CacheFile output,
-      CacheFile::create(kGraphName, "output.vmfb", /*remove=*/true));
+      CacheFile::create(kGraphName, kTestUid, "output.vmfb", /*remove=*/true));
 
   // Ensure cleanup happens even if REQUIRE() fails.
-  auto cleanup =
-      ScopeExit([&] { std::filesystem::remove_all(input.path.parent_path()); });
+  auto cleanup = ScopeExit([&] {
+    std::filesystem::remove_all(input.path.parent_path().parent_path());
+  });
 
   // Write a simple MLIR module to the input file.
   std::string mlirContent = getSimpleMLIRModule();
@@ -223,16 +225,17 @@ TEST_CASE("CompileSession::compile with custom flags",
       session.addFlag("--iree-vm-bytecode-module-strip-source-map=true"));
 
   // Create temporary cache files.
-  FUSILLI_REQUIRE_ASSIGN(
-      CacheFile input,
-      CacheFile::create(kGraphName, "input_opt.mlir", /*remove=*/true));
-  FUSILLI_REQUIRE_ASSIGN(
-      CacheFile output,
-      CacheFile::create(kGraphName, "output_opt.vmfb", /*remove=*/true));
+  FUSILLI_REQUIRE_ASSIGN(CacheFile input,
+                         CacheFile::create(kGraphName, kTestUid,
+                                           "input_opt.mlir", /*remove=*/true));
+  FUSILLI_REQUIRE_ASSIGN(CacheFile output,
+                         CacheFile::create(kGraphName, kTestUid,
+                                           "output_opt.vmfb", /*remove=*/true));
 
   // Ensure cleanup happens even if REQUIRE() fails.
-  auto cleanup =
-      ScopeExit([&] { std::filesystem::remove_all(input.path.parent_path()); });
+  auto cleanup = ScopeExit([&] {
+    std::filesystem::remove_all(input.path.parent_path().parent_path());
+  });
 
   // Write a simple MLIR module to the input file.
   std::string mlirContent = getSimpleMLIRModule();
@@ -259,14 +262,15 @@ TEST_CASE("CompileSession::compile with invalid MLIR",
   // Create temporary cache files.
   FUSILLI_REQUIRE_ASSIGN(
       CacheFile input,
-      CacheFile::create(kGraphName, "invalid.mlir", /*remove=*/true));
+      CacheFile::create(kGraphName, kTestUid, "invalid.mlir", /*remove=*/true));
   FUSILLI_REQUIRE_ASSIGN(
       CacheFile output,
-      CacheFile::create(kGraphName, "invalid.vmfb", /*remove=*/true));
+      CacheFile::create(kGraphName, kTestUid, "invalid.vmfb", /*remove=*/true));
 
   // Ensure cleanup happens even if REQUIRE() fails.
-  auto cleanup =
-      ScopeExit([&] { std::filesystem::remove_all(input.path.parent_path()); });
+  auto cleanup = ScopeExit([&] {
+    std::filesystem::remove_all(input.path.parent_path().parent_path());
+  });
 
   // Write invalid MLIR content.
   std::string invalidMLIR = "this is not valid MLIR syntax!";
@@ -290,14 +294,15 @@ TEST_CASE("CompileSession::compile with missing input file",
   // Create cache files but don't write to input.
   FUSILLI_REQUIRE_ASSIGN(
       CacheFile input,
-      CacheFile::create(kGraphName, "missing.mlir", /*remove=*/true));
+      CacheFile::create(kGraphName, kTestUid, "missing.mlir", /*remove=*/true));
   FUSILLI_REQUIRE_ASSIGN(
       CacheFile output,
-      CacheFile::create(kGraphName, "missing.vmfb", /*remove=*/true));
+      CacheFile::create(kGraphName, kTestUid, "missing.vmfb", /*remove=*/true));
 
   // Ensure cleanup happens even if REQUIRE() fails.
-  auto cleanup =
-      ScopeExit([&] { std::filesystem::remove_all(input.path.parent_path()); });
+  auto cleanup = ScopeExit([&] {
+    std::filesystem::remove_all(input.path.parent_path().parent_path());
+  });
 
   // Input file doesn't exist - should fail.
   auto compileResult =
@@ -336,15 +341,17 @@ TEST_CASE("CompileSession::compile with AMDGPU backend",
 
   // Create temporary cache files.
   FUSILLI_REQUIRE_ASSIGN(
-      CacheFile input,
-      CacheFile::create(kGraphName, "input_amdgpu.mlir", /*remove=*/true));
-  FUSILLI_REQUIRE_ASSIGN(
-      CacheFile output,
-      CacheFile::create(kGraphName, "output_amdgpu.vmfb", /*remove=*/true));
+      CacheFile input, CacheFile::create(kGraphName, kTestUid,
+                                         "input_amdgpu.mlir", /*remove=*/true));
+  FUSILLI_REQUIRE_ASSIGN(CacheFile output,
+                         CacheFile::create(kGraphName, kTestUid,
+                                           "output_amdgpu.vmfb",
+                                           /*remove=*/true));
 
   // Ensure cleanup happens even if REQUIRE() fails.
-  auto cleanup =
-      ScopeExit([&] { std::filesystem::remove_all(input.path.parent_path()); });
+  auto cleanup = ScopeExit([&] {
+    std::filesystem::remove_all(input.path.parent_path().parent_path());
+  });
 
   // Write a simple MLIR module to the input file.
   std::string mlirContent = getSimpleMLIRModule();
@@ -429,17 +436,20 @@ TEST_CASE("Multiple CompileContexts can coexist", "[CompileContext]") {
 
 TEST_CASE("CompileSession::build with CPU backend", "[CompileSession]") {
   FUSILLI_REQUIRE_ASSIGN(Handle handle, Handle::create(Backend::CPU));
-  FUSILLI_REQUIRE_ASSIGN(CacheFile input,
-                         CacheFile::create(kGraphName, "input.mlir", true));
-  FUSILLI_REQUIRE_ASSIGN(CacheFile output,
-                         CacheFile::create(kGraphName, "output.vmfb", true));
+  FUSILLI_REQUIRE_ASSIGN(
+      CacheFile input,
+      CacheFile::create(kGraphName, kTestUid, "input.mlir", true));
+  FUSILLI_REQUIRE_ASSIGN(
+      CacheFile output,
+      CacheFile::create(kGraphName, kTestUid, "output.vmfb", true));
   FUSILLI_REQUIRE_ASSIGN(
       CacheFile statistics,
-      CacheFile::create(kGraphName, "statistics.json", true));
+      CacheFile::create(kGraphName, kTestUid, "statistics.json", true));
 
   // Ensure cleanup happens even if REQUIRE() fails.
-  auto cleanup =
-      ScopeExit([&] { std::filesystem::remove_all(input.path.parent_path()); });
+  auto cleanup = ScopeExit([&] {
+    std::filesystem::remove_all(input.path.parent_path().parent_path());
+  });
 
   FUSILLI_REQUIRE_ASSIGN(
       CompileSession session,
@@ -468,17 +478,20 @@ TEST_CASE("CompileSession::build with CPU backend", "[CompileSession]") {
 
 TEST_CASE("CompileSession::toString format", "[CompileSession]") {
   FUSILLI_REQUIRE_ASSIGN(Handle handle, Handle::create(kDefaultBackend));
-  FUSILLI_REQUIRE_ASSIGN(CacheFile input,
-                         CacheFile::create(kGraphName, "input.mlir", true));
-  FUSILLI_REQUIRE_ASSIGN(CacheFile output,
-                         CacheFile::create(kGraphName, "output.vmfb", true));
+  FUSILLI_REQUIRE_ASSIGN(
+      CacheFile input,
+      CacheFile::create(kGraphName, kTestUid, "input.mlir", true));
+  FUSILLI_REQUIRE_ASSIGN(
+      CacheFile output,
+      CacheFile::create(kGraphName, kTestUid, "output.vmfb", true));
   FUSILLI_REQUIRE_ASSIGN(
       CacheFile statistics,
-      CacheFile::create(kGraphName, "statistics.json", true));
+      CacheFile::create(kGraphName, kTestUid, "statistics.json", true));
 
   // Ensure cleanup happens even if REQUIRE() fails.
-  auto cleanup =
-      ScopeExit([&] { std::filesystem::remove_all(input.path.parent_path()); });
+  auto cleanup = ScopeExit([&] {
+    std::filesystem::remove_all(input.path.parent_path().parent_path());
+  });
 
   FUSILLI_REQUIRE_ASSIGN(
       CompileSession session,
@@ -494,19 +507,23 @@ TEST_CASE("CompileSession::toString format", "[CompileSession]") {
 
 TEST_CASE("CompileSession::writeTo", "[CompileSession]") {
   FUSILLI_REQUIRE_ASSIGN(Handle handle, Handle::create(kDefaultBackend));
-  FUSILLI_REQUIRE_ASSIGN(CacheFile input,
-                         CacheFile::create(kGraphName, "input.mlir", true));
-  FUSILLI_REQUIRE_ASSIGN(CacheFile output,
-                         CacheFile::create(kGraphName, "output.vmfb", true));
+  FUSILLI_REQUIRE_ASSIGN(
+      CacheFile input,
+      CacheFile::create(kGraphName, kTestUid, "input.mlir", true));
+  FUSILLI_REQUIRE_ASSIGN(
+      CacheFile output,
+      CacheFile::create(kGraphName, kTestUid, "output.vmfb", true));
   FUSILLI_REQUIRE_ASSIGN(
       CacheFile statistics,
-      CacheFile::create(kGraphName, "statistics.json", true));
-  FUSILLI_REQUIRE_ASSIGN(CacheFile commandFile,
-                         CacheFile::create(kGraphName, "command.txt", true));
+      CacheFile::create(kGraphName, kTestUid, "statistics.json", true));
+  FUSILLI_REQUIRE_ASSIGN(
+      CacheFile commandFile,
+      CacheFile::create(kGraphName, kTestUid, "command.txt", true));
 
   // Ensure cleanup happens even if REQUIRE() fails.
-  auto cleanup =
-      ScopeExit([&] { std::filesystem::remove_all(input.path.parent_path()); });
+  auto cleanup = ScopeExit([&] {
+    std::filesystem::remove_all(input.path.parent_path().parent_path());
+  });
 
   FUSILLI_REQUIRE_ASSIGN(
       CompileSession session,
@@ -521,17 +538,20 @@ TEST_CASE("CompileSession::writeTo", "[CompileSession]") {
 
 TEST_CASE("CompileSession::execute with valid MLIR", "[CompileSession]") {
   FUSILLI_REQUIRE_ASSIGN(Handle handle, Handle::create(kDefaultBackend));
-  FUSILLI_REQUIRE_ASSIGN(CacheFile input,
-                         CacheFile::create(kGraphName, "input.mlir", true));
-  FUSILLI_REQUIRE_ASSIGN(CacheFile output,
-                         CacheFile::create(kGraphName, "output.vmfb", true));
+  FUSILLI_REQUIRE_ASSIGN(
+      CacheFile input,
+      CacheFile::create(kGraphName, kTestUid, "input.mlir", true));
+  FUSILLI_REQUIRE_ASSIGN(
+      CacheFile output,
+      CacheFile::create(kGraphName, kTestUid, "output.vmfb", true));
   FUSILLI_REQUIRE_ASSIGN(
       CacheFile statistics,
-      CacheFile::create(kGraphName, "statistics.json", true));
+      CacheFile::create(kGraphName, kTestUid, "statistics.json", true));
 
   // Ensure cleanup happens even if REQUIRE() fails.
-  auto cleanup =
-      ScopeExit([&] { std::filesystem::remove_all(input.path.parent_path()); });
+  auto cleanup = ScopeExit([&] {
+    std::filesystem::remove_all(input.path.parent_path().parent_path());
+  });
 
   // Write valid MLIR.
   FUSILLI_REQUIRE_OK(input.write(getSimpleMLIRModule()));
@@ -554,17 +574,20 @@ TEST_CASE("CompileSession::execute with valid MLIR", "[CompileSession]") {
 
 TEST_CASE("CompileSession::getArgs", "[CompileSession]") {
   FUSILLI_REQUIRE_ASSIGN(Handle handle, Handle::create(kDefaultBackend));
-  FUSILLI_REQUIRE_ASSIGN(CacheFile input,
-                         CacheFile::create(kGraphName, "input.mlir", true));
-  FUSILLI_REQUIRE_ASSIGN(CacheFile output,
-                         CacheFile::create(kGraphName, "output.vmfb", true));
+  FUSILLI_REQUIRE_ASSIGN(
+      CacheFile input,
+      CacheFile::create(kGraphName, kTestUid, "input.mlir", true));
+  FUSILLI_REQUIRE_ASSIGN(
+      CacheFile output,
+      CacheFile::create(kGraphName, kTestUid, "output.vmfb", true));
   FUSILLI_REQUIRE_ASSIGN(
       CacheFile statistics,
-      CacheFile::create(kGraphName, "statistics.json", true));
+      CacheFile::create(kGraphName, kTestUid, "statistics.json", true));
 
   // Ensure cleanup happens even if REQUIRE() fails.
-  auto cleanup =
-      ScopeExit([&] { std::filesystem::remove_all(input.path.parent_path()); });
+  auto cleanup = ScopeExit([&] {
+    std::filesystem::remove_all(input.path.parent_path().parent_path());
+  });
 
   FUSILLI_REQUIRE_ASSIGN(
       CompileSession session,
@@ -620,14 +643,15 @@ TEST_CASE("CompileSession::compile with tuning spec",
   std::string graphName = "test_compile_session_with_tuning_spec";
   FUSILLI_REQUIRE_ASSIGN(
       CacheFile input,
-      CacheFile::create(graphName, "input.mlir", /*remove=*/true));
+      CacheFile::create(graphName, kTestUid, "input.mlir", /*remove=*/true));
   FUSILLI_REQUIRE_ASSIGN(
       CacheFile output,
-      CacheFile::create(graphName, "output.vmfb", /*remove=*/true));
+      CacheFile::create(graphName, kTestUid, "output.vmfb", /*remove=*/true));
 
   // Ensure cleanup happens even if REQUIRE() fails.
-  auto cleanup =
-      ScopeExit([&] { std::filesystem::remove_all(input.path.parent_path()); });
+  auto cleanup = ScopeExit([&] {
+    std::filesystem::remove_all(input.path.parent_path().parent_path());
+  });
 
   // Write a simple MLIR module to the input file.
   std::string mlirContent = R"(

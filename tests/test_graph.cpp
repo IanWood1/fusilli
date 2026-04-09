@@ -253,28 +253,21 @@ TEST_CASE("Graph `getCompiledArtifact` should not read cached items from "
     // Cache should be empty.
     std::optional<bool> reCompiled = std::nullopt;
     FUSILLI_REQUIRE_OK(g.getCompiledArtifact(handle, generatedAsm,
-                                             /*remove=*/false, &reCompiled));
+                                             /*remove=*/true, &reCompiled));
     REQUIRE(reCompiled.has_value());
     REQUIRE(reCompiled.value());
 
     // Cache should hit with the same generated asm.
     reCompiled = std::nullopt;
     FUSILLI_REQUIRE_OK(g.getCompiledArtifact(handle, generatedAsm,
-                                             /*remove=*/false, &reCompiled));
+                                             /*remove=*/true, &reCompiled));
     REQUIRE(reCompiled.has_value());
     REQUIRE(!reCompiled.value());
   }
 
   Graph g = testGraph(/*validate=*/true);
 
-  // Check that the generated asm matches the cache.
-  FUSILLI_REQUIRE_ASSIGN(
-      CacheFile asmCache,
-      CacheFile::open(g.getName(), IREE_COMPILE_INPUT_FILENAME));
-  FUSILLI_REQUIRE_ASSIGN(std::string asmContent, asmCache.read());
-  REQUIRE(asmContent == generatedAsm);
-
-  // Nonetheless a new instance should regenerate cache.
+  // A new instance should regenerate cache (per-instance UID isolation).
   std::optional<bool> reCompiled = std::nullopt;
   FUSILLI_REQUIRE_OK(g.getCompiledArtifact(handle, generatedAsm,
                                            /*remove=*/true, &reCompiled));
@@ -285,9 +278,12 @@ TEST_CASE("Graph `getCompiledArtifact` should not read cached items from "
 TEST_CASE("Graph `getCompiledArtifact` invalid input IR", "[graph]") {
   FUSILLI_REQUIRE_ASSIGN(Handle handle, Handle::create(kDefaultBackend));
   std::string graphName;
+  std::string graphUid;
   {
     Graph g;
     g.setName("invalid_input_ir");
+    graphName = g.getName();
+    graphUid = g.getCacheUid();
     ErrorObject err =
         g.getCompiledArtifact(handle, "invalid mlir", /*remove=*/true);
     REQUIRE(isError(err));
@@ -299,7 +295,7 @@ TEST_CASE("Graph `getCompiledArtifact` invalid input IR", "[graph]") {
   }
   // Cache created with "remove", ensure it is removed after the test.
   REQUIRE(!std::filesystem::exists(
-      CacheFile::getPath(graphName, "test").parent_path()));
+      CacheFile::getPath(graphName, graphUid, "test").parent_path()));
 }
 
 TEST_CASE("Graph `compile` method fails without validation", "[graph]") {
@@ -322,9 +318,8 @@ TEST_CASE("Graph `compile` recompilations with changed handle", "[graph]") {
   Graph g = testGraph(/*validate=*/true);
 
   // Path to compile command cache file.
-  auto cacheDir = CacheFile::getCacheDir();
-  std::filesystem::path cmdPath =
-      cacheDir / g.getName() / "iree-compile-command.txt";
+  std::filesystem::path cmdPath = CacheFile::getPath(
+      g.getName(), g.getCacheUid(), IREE_COMPILE_COMMAND_FILENAME);
 
   FUSILLI_REQUIRE_ASSIGN(Handle cpuHandle, Handle::create(Backend::CPU));
   FUSILLI_REQUIRE_OK(g.compile(cpuHandle, /*remove=*/true));

@@ -19,12 +19,14 @@
 using namespace fusilli;
 
 static std::string kGraphName = "test_cache";
+static std::string kTestUid = "test_uid";
 
 TEST_CASE("CacheFile::create remove = true", "[CacheFile]") {
   // Ensure cleanup happens even if REQUIRE() fails.
   auto cleanup = ScopeExit([&] {
-    std::filesystem::remove_all(
-        CacheFile::getPath(kGraphName, "a").parent_path());
+    std::filesystem::remove_all(CacheFile::getPath(kGraphName, kTestUid, "a")
+                                    .parent_path()
+                                    .parent_path());
   });
 
   SECTION("cache removal") {
@@ -32,6 +34,7 @@ TEST_CASE("CacheFile::create remove = true", "[CacheFile]") {
     {
       FUSILLI_REQUIRE_ASSIGN(CacheFile cf, CacheFile::create(
                                                /*graphName=*/kGraphName,
+                                               /*uid=*/kTestUid,
                                                /*filename=*/"test_temp_file",
                                                /*remove=*/true));
 
@@ -53,10 +56,12 @@ TEST_CASE("CacheFile::create remove = true", "[CacheFile]") {
     // Create two cache files with remove=true.
     FUSILLI_REQUIRE_ASSIGN(CacheFile cf1, CacheFile::create(
                                               /*graphName=*/kGraphName,
+                                              /*uid=*/kTestUid,
                                               /*filename=*/"test_file_1",
                                               /*remove=*/true));
     FUSILLI_REQUIRE_ASSIGN(CacheFile cf2, CacheFile::create(
                                               /*graphName=*/kGraphName,
+                                              /*uid=*/kTestUid,
                                               /*filename=*/"test_file_2",
                                               /*remove=*/true));
 
@@ -97,8 +102,9 @@ TEST_CASE("CacheFile::create remove = true", "[CacheFile]") {
 TEST_CASE("CacheFile::create remove = false", "[CacheFile]") {
   // Ensure cleanup happens even if REQUIRE() fails.
   auto cleanup = ScopeExit([&] {
-    std::filesystem::remove_all(
-        CacheFile::getPath(kGraphName, "a").parent_path());
+    std::filesystem::remove_all(CacheFile::getPath(kGraphName, kTestUid, "a")
+                                    .parent_path()
+                                    .parent_path());
   });
 
   SECTION("cache persistence") {
@@ -106,6 +112,7 @@ TEST_CASE("CacheFile::create remove = false", "[CacheFile]") {
     {
       FUSILLI_REQUIRE_ASSIGN(CacheFile cf, CacheFile::create(
                                                /*graphName=*/kGraphName,
+                                               /*uid=*/kTestUid,
                                                /*filename=*/"test_temp_file",
                                                /*remove=*/false));
 
@@ -122,10 +129,12 @@ TEST_CASE("CacheFile::create remove = false", "[CacheFile]") {
     // Create two cache files with remove=false.
     FUSILLI_REQUIRE_ASSIGN(CacheFile cf1, CacheFile::create(
                                               /*graphName=*/kGraphName,
+                                              /*uid=*/kTestUid,
                                               /*filename=*/"test_file_1",
                                               /*remove=*/false));
     FUSILLI_REQUIRE_ASSIGN(CacheFile cf2, CacheFile::create(
                                               /*graphName=*/kGraphName,
+                                              /*uid=*/kTestUid,
                                               /*filename=*/"test_file_2",
                                               /*remove=*/false));
 
@@ -162,7 +171,8 @@ TEST_CASE("CacheFile::create remove = false", "[CacheFile]") {
 
 TEST_CASE("CacheFile::open", "[CacheFile]") {
   // Try to open a file that doesn't exist.
-  ErrorOr<CacheFile> failOpen = CacheFile::open(kGraphName, "test_file.txt");
+  ErrorOr<CacheFile> failOpen =
+      CacheFile::open(kGraphName, kTestUid, "test_file.txt");
   REQUIRE(isError(failOpen));
   ErrorObject err(failOpen);
   REQUIRE(err.getCode() == ErrorCode::FileSystemFailure);
@@ -172,18 +182,20 @@ TEST_CASE("CacheFile::open", "[CacheFile]") {
   // Create the file.
   FUSILLI_REQUIRE_ASSIGN(CacheFile cacheFile, CacheFile::create(
                                                   /*graphName=*/kGraphName,
+                                                  /*uid=*/kTestUid,
                                                   /*filename=*/"test_file.txt",
                                                   /*remove=*/true));
 
   // Ensure cleanup happens even if REQUIRE() fails.
-  auto cleanup = ScopeExit(
-      [&] { std::filesystem::remove_all(cacheFile.path.parent_path()); });
+  auto cleanup = ScopeExit([&] {
+    std::filesystem::remove_all(cacheFile.path.parent_path().parent_path());
+  });
 
   FUSILLI_REQUIRE_OK(cacheFile.write("test data"));
 
   // Now open the existing file.
-  FUSILLI_REQUIRE_ASSIGN(CacheFile opened,
-                         CacheFile::open(kGraphName, "test_file.txt"));
+  FUSILLI_REQUIRE_ASSIGN(
+      CacheFile opened, CacheFile::open(kGraphName, kTestUid, "test_file.txt"));
 
   // Verify we can read the content.
   FUSILLI_REQUIRE_ASSIGN(std::string content, opened.read());
@@ -194,16 +206,18 @@ TEST_CASE("CacheFile directory sanitization", "[CacheFile]") {
   // Test that special characters in graph name are sanitized.
   FUSILLI_REQUIRE_ASSIGN(CacheFile cacheFile,
                          CacheFile::create(/*graphName=*/"test / gr@ph!",
+                                           /*uid=*/kTestUid,
                                            /*filename=*/"test_file.txt",
                                            /*remove=*/true));
 
   // Ensure cleanup happens even if REQUIRE() fails.
-  auto cleanup = ScopeExit(
-      [&] { std::filesystem::remove_all(cacheFile.path.parent_path()); });
+  auto cleanup = ScopeExit([&] {
+    std::filesystem::remove_all(cacheFile.path.parent_path().parent_path());
+  });
 
   // Extract the sanitized directory name from the path.
-  std::filesystem::path dirPath = cacheFile.path.parent_path();
-  std::string actualDirName = dirPath.filename().string();
+  std::filesystem::path uidDir = cacheFile.path.parent_path();
+  std::string actualDirName = uidDir.parent_path().filename().string();
 
   // Spaces should be replaced with underscores, special chars removed.
   REQUIRE(actualDirName == "test__grph");
