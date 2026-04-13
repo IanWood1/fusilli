@@ -51,31 +51,33 @@ inline std::string generateCacheUid() {
 // `${HOME}/.cache/fusilli`.
 //
 //  void example() {
+//    std::string uid = generateCacheUid();
+//
 //    // `remove = true`
 //    {
-//      // Create ${HOME}/.cache/fusilli/example_graph/input
+//      // Create ${HOME}/.cache/fusilli/example_graph/<uid>/input
 //      ErrorOr<CacheFile> cacheFile = CacheFile::create(
-//          /*graphName=*/"example_graph", /*filename=*/"input",
-//          /*remove=*/true);
+//          /*graphName=*/"example_graph", /*uid=*/uid,
+//          /*filename=*/"input", /*remove=*/true);
 //      assert(isOk(cacheFile));
 //
 //      assert(isOk(CacheFile::open(/*graphName=*/"example_graph",
-//                                  /*filename=*/"input")));
+//                                  /*uid=*/uid, /*filename=*/"input")));
 //    }
 //    // Try to open the same (now removed) cache file.
 //    assert(isError(CacheFile::open(/*graphName=*/"example_graph",
-//                                   /*filename=*/"input")));
+//                                   /*uid=*/uid, /*filename=*/"input")));
 //
 //    // `remove = false`
 //    {
 //      ErrorOr<CacheFile> cacheFile = CacheFile::create(
-//          /*graphName=*/"example_graph", /*filename=*/"input",
-//          /*remove=*/false);
+//          /*graphName=*/"example_graph", /*uid=*/uid,
+//          /*filename=*/"input", /*remove=*/false);
 //      assert(isOk(cacheFile));
 //    }
 //    // Try to open the same cache file. This time it's found.
 //    assert(isOk(CacheFile::open(/*graphName=*/"example_graph",
-//                                /*filename=*/"input")));
+//                                /*uid=*/uid, /*filename=*/"input")));
 //  }
 class CacheFile {
 public:
@@ -294,20 +296,23 @@ struct CleanupCacheDirectory {
   CleanupCacheDirectory &operator=(CleanupCacheDirectory &&) = delete;
 
   ~CleanupCacheDirectory() {
-    // This likely indicates the instance in question has been moved from.
     if (cacheDir.empty())
       return;
+    removeEmptyDirAndParent(cacheDir);
+  }
 
-    // Remove the uid directory if empty.
-    if (std::filesystem::exists(cacheDir) &&
-        std::filesystem::is_empty(cacheDir))
-      std::filesystem::remove(cacheDir);
+  // Remove `dir` if empty, then remove its parent if also empty. Uses
+  // error_code overloads to avoid throwing in noexcept / destructor contexts.
+  static void removeEmptyDirAndParent(const std::filesystem::path &dir) {
+    std::error_code ec;
+    if (std::filesystem::exists(dir, ec) && !ec &&
+        std::filesystem::is_empty(dir, ec) && !ec)
+      std::filesystem::remove(dir, ec);
 
-    // Also remove the parent graph-name directory if it is now empty.
-    std::filesystem::path graphDir = cacheDir.parent_path();
-    if (!graphDir.empty() && std::filesystem::exists(graphDir) &&
-        std::filesystem::is_empty(graphDir))
-      std::filesystem::remove(graphDir);
+    std::filesystem::path parent = dir.parent_path();
+    if (!parent.empty() && std::filesystem::exists(parent, ec) && !ec &&
+        std::filesystem::is_empty(parent, ec) && !ec)
+      std::filesystem::remove(parent, ec);
   }
 };
 
@@ -363,14 +368,8 @@ struct CachedAssets : CleanupCacheDirectory {
     cacheDir = std::move(other.cacheDir);
 
     // Clean up old directory if it became empty and differs from the new one.
-    if (!oldDir.empty() && oldDir != cacheDir) {
-      if (std::filesystem::exists(oldDir) && std::filesystem::is_empty(oldDir))
-        std::filesystem::remove(oldDir);
-      std::filesystem::path graphDir = oldDir.parent_path();
-      if (!graphDir.empty() && std::filesystem::exists(graphDir) &&
-          std::filesystem::is_empty(graphDir))
-        std::filesystem::remove(graphDir);
-    }
+    if (!oldDir.empty() && oldDir != cacheDir)
+      removeEmptyDirAndParent(oldDir);
 
     return *this;
   }

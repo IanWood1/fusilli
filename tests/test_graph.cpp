@@ -239,6 +239,37 @@ TEST_CASE("Graph `getCompiledArtifact` cache generation and invalidation",
   REQUIRE(reCompiled.value());
 }
 
+TEST_CASE("Graph `getCompiledArtifact` cleans up old cache directory on graph "
+          "name change",
+          "[graph]") {
+  FUSILLI_REQUIRE_ASSIGN(Handle handle, Handle::create(kDefaultBackend));
+
+  Graph g = testGraph(/*validate=*/true);
+  FUSILLI_REQUIRE_ASSIGN(std::string generatedAsm, g.emitAsm());
+
+  // Compile under the original name.
+  FUSILLI_REQUIRE_OK(g.getCompiledArtifact(handle, generatedAsm,
+                                           /*remove=*/true));
+
+  // Record the old cache directory path.
+  std::filesystem::path oldUidDir =
+      CacheFile::getPath(g.getName(), g.getCacheUid(),
+                         IREE_COMPILE_INPUT_FILENAME)
+          .parent_path();
+  std::filesystem::path oldGraphDir = oldUidDir.parent_path();
+  REQUIRE(std::filesystem::exists(oldUidDir));
+
+  // Change name and recompile — triggers CachedAssets::operator= which must
+  // clean up the old directory.
+  g.setName("renamed_graph");
+  FUSILLI_REQUIRE_OK(g.getCompiledArtifact(handle, generatedAsm,
+                                           /*remove=*/true));
+
+  // The old uid directory and its parent graph-name directory should be gone.
+  REQUIRE(!std::filesystem::exists(oldUidDir));
+  REQUIRE(!std::filesystem::exists(oldGraphDir));
+}
+
 TEST_CASE("Graph `getCompiledArtifact` should not read cached items from "
           "other/previous Graph instances",
           "[graph]") {
