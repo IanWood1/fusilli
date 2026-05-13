@@ -81,6 +81,38 @@ generateIOTensorsForTrainForward(int64_t n, int64_t c, int64_t h, int64_t w,
                          expectedVariances);
 }
 
+// Generates input and expected output tensors for LayerNorm backward mode using
+// the same two-value per-batch pattern as the forward helpers.
+inline std::tuple<std::vector<float>, std::vector<float>, std::vector<float>,
+                  std::vector<float>, std::vector<float>, std::vector<float>,
+                  std::vector<float>, std::vector<float>>
+generateIOTensorsForBackward(int64_t n, int64_t c, int64_t h, int64_t w,
+                             float dy, float scale, float eps) {
+  constexpr float bias = 0.0f;
+  auto [inputVals, unusedExpectedVals, meanVals, unusedVarianceVals] =
+      generateIOTensorsForTrainForward(n, c, h, w, scale, bias, eps);
+  (void)unusedExpectedVals;
+  (void)unusedVarianceVals;
+
+  const int64_t chw = c * h * w;
+  const float invVariance = 1.0f / std::sqrt(1.0f + eps);
+  std::vector<float> dyVals(n * chw, dy);
+  std::vector<float> scaleVals(chw, scale);
+  std::vector<float> invVarianceVals(n, invVariance);
+  std::vector<float> expectedDx(n * chw, 0.0f);
+  std::vector<float> expectedDscale(chw, 0.0f);
+  std::vector<float> expectedDbias(chw, static_cast<float>(n) * dy);
+
+  for (int64_t idx = 0; idx < chw; ++idx) {
+    const float sign = idx < chw / 2 ? -1.0f : 1.0f;
+    expectedDscale[idx] = static_cast<float>(n) * dy * sign * invVariance;
+  }
+
+  return std::make_tuple(dyVals, inputVals, scaleVals, meanVals,
+                         invVarianceVals, expectedDx, expectedDscale,
+                         expectedDbias);
+}
+
 } // namespace fusilli::layernorm_utils
 
 #endif // FUSILLI_SAMPLES_LAYERNORM_LAYERNORM_UTILS_H

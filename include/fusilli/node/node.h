@@ -35,6 +35,7 @@ public:
     WGrad,
     DGrad,
     LayerNorm,
+    LayerNormBwd,
     BatchNorm,
     RmsNorm,
     Matmul,

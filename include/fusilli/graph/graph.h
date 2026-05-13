@@ -357,6 +357,13 @@ public:
   layernorm(const std::shared_ptr<TensorAttr> &x,
             const std::shared_ptr<TensorAttr> &scale,
             const std::shared_ptr<TensorAttr> &bias, LayernormAttr &attributes);
+  std::array<std::shared_ptr<TensorAttr>, 3>
+  layernormBwd(const std::shared_ptr<TensorAttr> &dy,
+               const std::shared_ptr<TensorAttr> &x,
+               const std::shared_ptr<TensorAttr> &scale,
+               const std::shared_ptr<TensorAttr> &mean,
+               const std::shared_ptr<TensorAttr> &invVariance,
+               LayernormBwdAttr &attributes);
   std::array<std::shared_ptr<TensorAttr>, 2>
   rmsnorm(const std::shared_ptr<TensorAttr> &x,
           const std::shared_ptr<TensorAttr> &scale, RmsnormAttr &attributes);
@@ -951,6 +958,61 @@ Graph::layernorm(const std::shared_ptr<TensorAttr> &x,
   // necessary in methods where a single local variable is returned
   // as NRVO would handle it.
   return {std::move(y), std::move(m), std::move(v)};
+}
+
+// Create a LayerNormBwdNode, populate it with the specified attributes, create
+// output tensors and add the node to the graph's sub nodes.
+inline std::array<std::shared_ptr<TensorAttr>, 3>
+Graph::layernormBwd(const std::shared_ptr<TensorAttr> &dy,
+                    const std::shared_ptr<TensorAttr> &x,
+                    const std::shared_ptr<TensorAttr> &scale,
+                    const std::shared_ptr<TensorAttr> &mean,
+                    const std::shared_ptr<TensorAttr> &invVariance,
+                    LayernormBwdAttr &layernormBwdAttr) {
+  // Populate names when not set.
+  if (layernormBwdAttr.getName().empty())
+    layernormBwdAttr.setName("layernorm_bwd_" +
+                             std::to_string(subNodes_.size()));
+  if (dy && dy->getName().empty())
+    dy->setName(layernormBwdAttr.getName() + "_DY");
+  if (x && x->getName().empty())
+    x->setName(layernormBwdAttr.getName() + "_X");
+  if (scale && scale->getName().empty())
+    scale->setName(layernormBwdAttr.getName() + "_SCALE");
+  if (mean && mean->getName().empty())
+    mean->setName(layernormBwdAttr.getName() + "_MEAN");
+  if (invVariance && invVariance->getName().empty())
+    invVariance->setName(layernormBwdAttr.getName() + "_INV_VARIANCE");
+  auto eps = layernormBwdAttr.getEpsilon();
+  if (eps && eps->getName().empty())
+    eps->setName(layernormBwdAttr.getName() + "_EPSILON");
+
+  FUSILLI_LOG_LABEL_ENDL("INFO: Adding LayerNormBwd '"
+                         << layernormBwdAttr.getName() << "' to Graph");
+
+  // Set inputs.
+  layernormBwdAttr.setDY(dy);
+  layernormBwdAttr.setX(x);
+  layernormBwdAttr.setSCALE(scale);
+  layernormBwdAttr.setMEAN(mean);
+  layernormBwdAttr.setINV_VARIANCE(invVariance);
+
+  // Set outputs.
+  std::shared_ptr<TensorAttr> dx =
+      outputTensor(layernormBwdAttr.getName() + "_DX");
+  std::shared_ptr<TensorAttr> dscale =
+      outputTensor(layernormBwdAttr.getName() + "_DSCALE");
+  std::shared_ptr<TensorAttr> dbias =
+      outputTensor(layernormBwdAttr.getName() + "_DBIAS");
+  layernormBwdAttr.setDX(dx);
+  layernormBwdAttr.setDSCALE(dscale);
+  layernormBwdAttr.setDBIAS(dbias);
+
+  // Create node and add to Graph's subNodes_.
+  subNodes_.emplace_back(
+      std::make_unique<LayerNormBwdNode>(std::move(layernormBwdAttr), context));
+
+  return {std::move(dx), std::move(dscale), std::move(dbias)};
 }
 
 // Create a RmsNormNode, populate it with the specified attributes, create

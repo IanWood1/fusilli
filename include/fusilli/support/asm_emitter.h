@@ -1463,6 +1463,229 @@ inline std::string LayerNormNode::emitNodePreAsm() const {
 
 //===----------------------------------------------------------------------===//
 //
+// LayerNormBwdNode ASM Emitter Methods
+//
+//===----------------------------------------------------------------------===//
+
+// Emits LayerNormBwdNode's operand names in MLIR assembly format.
+//
+// `torch.aten.native_layer_norm_backward` operand order:
+//   (grad_out, input, normalized_shape, mean, rstd, weight, bias, output_mask)
+inline std::string LayerNormBwdNode::getOperandNamesAsm() const {
+  std::ostringstream oss;
+  std::string suffix = layernormBwdAttr.getName();
+
+  oss << layernormBwdAttr.getDY()->getValueNameAsm() << "_" << suffix
+      << "_perm, ";
+  oss << layernormBwdAttr.getX()->getValueNameAsm() << "_" << suffix
+      << "_perm, ";
+  oss << "%normalized_shape_" << suffix << ", ";
+  oss << layernormBwdAttr.getMEAN()->getValueNameAsm() << "_" << suffix
+      << "_perm, ";
+  oss << layernormBwdAttr.getINV_VARIANCE()->getValueNameAsm() << "_" << suffix
+      << "_perm, ";
+  oss << layernormBwdAttr.getSCALE()->getValueNameAsm() << "_" << suffix
+      << "_perm, ";
+  oss << "%none_bias_" << suffix << ", ";
+  oss << "%output_mask_" << suffix;
+
+  return oss.str();
+}
+
+// Emits LayerNormBwdNode's operand types in MLIR assembly format.
+inline std::string LayerNormBwdNode::getOperandTypesAsm() const {
+  std::ostringstream oss;
+
+  oss << layernormBwdAttr.getDY()->getTensorTypeAsm(/*isValueTensor=*/true,
+                                                    /*useLogicalDims=*/true)
+      << ", ";
+  oss << layernormBwdAttr.getX()->getTensorTypeAsm(/*isValueTensor=*/true,
+                                                   /*useLogicalDims=*/true)
+      << ", ";
+  oss << "!torch.list<int>" << ", ";
+  oss << layernormBwdAttr.getMEAN()->getTensorTypeAsm(
+             /*isValueTensor=*/true,
+             /*useLogicalDims=*/true)
+      << ", ";
+  oss << layernormBwdAttr.getINV_VARIANCE()->getTensorTypeAsm(
+             /*isValueTensor=*/true,
+             /*useLogicalDims=*/true)
+      << ", ";
+  oss << layernormBwdAttr.getSCALE()->getTensorTypeAsm(
+             /*isValueTensor=*/true,
+             /*useLogicalDims=*/true)
+      << ", ";
+  oss << "!torch.none" << ", ";
+  oss << "!torch.list<bool>";
+
+  return oss.str();
+}
+
+// Emits LayerNormBwdNode's result names in MLIR assembly format.
+inline std::string LayerNormBwdNode::getResultNamesAsm() const {
+  std::ostringstream oss;
+  std::string suffix = layernormBwdAttr.getName();
+
+  oss << layernormBwdAttr.getDX()->getValueNameAsm() << "_" << suffix
+      << "_perm, ";
+  oss << layernormBwdAttr.getDSCALE()->getValueNameAsm() << "_" << suffix
+      << "_perm, ";
+  oss << layernormBwdAttr.getDBIAS()->getValueNameAsm() << "_" << suffix
+      << "_perm";
+
+  return oss.str();
+}
+
+// Emits LayerNormBwdNode's result types in MLIR assembly format.
+inline std::string LayerNormBwdNode::getResultTypesAsm() const {
+  std::ostringstream oss;
+
+  oss << layernormBwdAttr.getDX()->getTensorTypeAsm(/*isValueTensor=*/true,
+                                                    /*useLogicalDims=*/true)
+      << ", ";
+  oss << layernormBwdAttr.getDSCALE()->getTensorTypeAsm(
+             /*isValueTensor=*/true,
+             /*useLogicalDims=*/true)
+      << ", ";
+  oss << layernormBwdAttr.getDBIAS()->getTensorTypeAsm(
+      /*isValueTensor=*/true,
+      /*useLogicalDims=*/true);
+
+  return oss.str();
+}
+
+inline std::string LayerNormBwdNode::getNormalizedShapeOpsAsm() const {
+  return getListOfIntOpsAsm(getNormalizedShape(), /*prefix=*/"normalized_shape",
+                            /*suffix=*/layernormBwdAttr.getName());
+}
+
+inline std::string LayerNormBwdNode::getNormalizedDimsOpsAsm() const {
+  return getListOfIntOpsAsm(getNormalizedDims(), /*prefix=*/"normalized_dims",
+                            /*suffix=*/layernormBwdAttr.getName());
+}
+
+inline std::string LayerNormBwdNode::getParameterDimsOpsAsm() const {
+  return getListOfIntOpsAsm(getParameterDims(), /*prefix=*/"parameter_dims",
+                            /*suffix=*/layernormBwdAttr.getName());
+}
+
+inline std::string LayerNormBwdNode::getOutputMaskOpsAsm() const {
+  std::string suffix = layernormBwdAttr.getName();
+  constexpr std::string_view schema = R"(
+    %true_{0} = torch.constant.bool true
+    %output_mask_{0} = torch.prim.ListConstruct %true_{0}, %true_{0}, %true_{0} : (!torch.bool, !torch.bool, !torch.bool) -> !torch.list<bool>
+  )";
+  return std::format(schema, suffix);
+}
+
+inline std::string LayerNormBwdNode::emitNodePreAsm() const {
+  std::string uniqueSSASuffix = layernormBwdAttr.getName();
+  std::string permuteDY = getLayoutConversionOpsAsm(
+      layernormBwdAttr.getDY(), "permute_dy", uniqueSSASuffix,
+      /*isInput=*/true);
+  std::string permuteX = getLayoutConversionOpsAsm(
+      layernormBwdAttr.getX(), "permute_x", uniqueSSASuffix, /*isInput=*/true);
+  std::string permuteMean =
+      getLayoutConversionOpsAsm(layernormBwdAttr.getMEAN(), "permute_mean",
+                                uniqueSSASuffix, /*isInput=*/true);
+  std::string permuteInvVariance = getLayoutConversionOpsAsm(
+      layernormBwdAttr.getINV_VARIANCE(), "permute_inv_variance",
+      uniqueSSASuffix, /*isInput=*/true);
+  std::string permuteScale =
+      getLayoutConversionOpsAsm(layernormBwdAttr.getSCALE(), "permute_scale",
+                                uniqueSSASuffix, /*isInput=*/true);
+  std::string permuteDX = getLayoutConversionOpsAsm(
+      layernormBwdAttr.getDX(), "permute_dx", uniqueSSASuffix,
+      /*isInput=*/false);
+  std::string permuteDScale =
+      getLayoutConversionOpsAsm(layernormBwdAttr.getDSCALE(), "permute_dscale",
+                                uniqueSSASuffix, /*isInput=*/false);
+  std::string permuteDBias =
+      getLayoutConversionOpsAsm(layernormBwdAttr.getDBIAS(), "permute_dbias",
+                                uniqueSSASuffix, /*isInput=*/false);
+
+  const auto &xDim = layernormBwdAttr.getX()->getDim();
+  std::string inputType = layernormBwdAttr.getX()->getTensorTypeAsm(
+      /*isValueTensor=*/true, /*useLogicalDims=*/true);
+  std::string statsType = layernormBwdAttr.getMEAN()->getTensorTypeAsm(
+      /*isValueTensor=*/true, /*useLogicalDims=*/true);
+  std::string scaleType = layernormBwdAttr.getSCALE()->getTensorTypeAsm(
+      /*isValueTensor=*/true, /*useLogicalDims=*/true);
+  std::string dxType = layernormBwdAttr.getDX()->getTensorTypeAsm(
+      /*isValueTensor=*/true, /*useLogicalDims=*/true);
+  std::string dscaleType = layernormBwdAttr.getDSCALE()->getTensorTypeAsm(
+      /*isValueTensor=*/true, /*useLogicalDims=*/true);
+  std::string dbiasType = layernormBwdAttr.getDBIAS()->getTensorTypeAsm(
+      /*isValueTensor=*/true, /*useLogicalDims=*/true);
+  auto permutedValueName =
+      [&](const std::shared_ptr<TensorAttr> &tensor) -> std::string {
+    return tensor->getValueNameAsm() + "_" + uniqueSSASuffix + "_perm";
+  };
+  bool keepParameterDims =
+      layernormBwdAttr.getDSCALE()->getDim().size() == xDim.size();
+
+  std::ostringstream oss;
+  oss << "\n    " << getNormalizedDimsOpsAsm();
+  oss << "\n    " << getParameterDimsOpsAsm();
+  oss << "    "
+      << getListOfIntOpsAsm(xDim, /*prefix=*/"input_shape",
+                            /*suffix=*/uniqueSSASuffix);
+  oss << "\n    %true_" << uniqueSSASuffix << " = torch.constant.bool true";
+  oss << "\n    %keep_param_dims_" << uniqueSSASuffix
+      << " = torch.constant.bool " << (keepParameterDims ? "true" : "false");
+  oss << "\n    %expand_implicit_" << uniqueSSASuffix
+      << " = torch.constant.bool false";
+  oss << "\n    %none_" << uniqueSSASuffix << " = torch.constant.none";
+  oss << "\n    %alpha_" << uniqueSSASuffix << " = torch.constant.int 1";
+  oss << "\n    " << permuteDY;
+  oss << "\n    " << permuteX;
+  oss << "\n    " << permuteMean;
+  oss << "\n    " << permuteInvVariance;
+  oss << "\n    " << permuteScale;
+  oss << std::format(
+      R"(
+    %mean_expanded_{0} = torch.aten.expand {7}, %input_shape_{0}, %expand_implicit_{0} : {1}, !torch.list<int>, !torch.bool -> {2}
+    %inv_variance_expanded_{0} = torch.aten.expand {8}, %input_shape_{0}, %expand_implicit_{0} : {1}, !torch.list<int>, !torch.bool -> {2}
+    %input_zero_mean_{0} = torch.aten.sub.Tensor {9}, %mean_expanded_{0}, %alpha_{0} : {2}, {2}, !torch.int -> {2}
+    %input_normalized_{0} = torch.aten.mul.Tensor %input_zero_mean_{0}, %inv_variance_expanded_{0} : {2}, {2} -> {2}
+    %grad_out_weighted_{0} = torch.aten.mul.Tensor {10}, {11} : {2}, {3} -> {2}
+    %grad_out_weighted_mean_{0} = torch.aten.mean.dim %grad_out_weighted_{0}, %normalized_dims_{0}, %true_{0}, %none_{0} : {2}, !torch.list<int>, !torch.bool, !torch.none -> {1}
+    %grad_out_weighted_mean_expanded_{0} = torch.aten.expand %grad_out_weighted_mean_{0}, %input_shape_{0}, %expand_implicit_{0} : {1}, !torch.list<int>, !torch.bool -> {2}
+    %grad_out_weighted_input_normalized_{0} = torch.aten.mul.Tensor %grad_out_weighted_{0}, %input_normalized_{0} : {2}, {2} -> {2}
+    %grad_out_weighted_input_normalized_mean_{0} = torch.aten.mean.dim %grad_out_weighted_input_normalized_{0}, %normalized_dims_{0}, %true_{0}, %none_{0} : {2}, !torch.list<int>, !torch.bool, !torch.none -> {1}
+    %grad_out_weighted_input_normalized_mean_expanded_{0} = torch.aten.expand %grad_out_weighted_input_normalized_mean_{0}, %input_shape_{0}, %expand_implicit_{0} : {1}, !torch.list<int>, !torch.bool -> {2}
+    %scaled_input_normalized_mean_{0} = torch.aten.mul.Tensor %input_normalized_{0}, %grad_out_weighted_input_normalized_mean_expanded_{0} : {2}, {2} -> {2}
+    %centered_grad_step_0_{0} = torch.aten.sub.Tensor %grad_out_weighted_{0}, %grad_out_weighted_mean_expanded_{0}, %alpha_{0} : {2}, {2}, !torch.int -> {2}
+    %centered_grad_{0} = torch.aten.sub.Tensor %centered_grad_step_0_{0}, %scaled_input_normalized_mean_{0}, %alpha_{0} : {2}, {2}, !torch.int -> {2}
+    {12} = torch.aten.mul.Tensor %centered_grad_{0}, %inv_variance_expanded_{0} : {2}, {2} -> {4}
+    %grad_weight_input_{0} = torch.aten.mul.Tensor {10}, %input_normalized_{0} : {2}, {2} -> {2}
+    {13} = torch.aten.sum.dim_IntList %grad_weight_input_{0}, %parameter_dims_{0}, %keep_param_dims_{0}, %none_{0} : {2}, !torch.list<int>, !torch.bool, !torch.none -> {5}
+    {14} = torch.aten.sum.dim_IntList {10}, %parameter_dims_{0}, %keep_param_dims_{0}, %none_{0} : {2}, !torch.list<int>, !torch.bool, !torch.none -> {6}
+  )",
+      uniqueSSASuffix,                                       // {0}
+      statsType,                                             // {1}
+      inputType,                                             // {2}
+      scaleType,                                             // {3}
+      dxType,                                                // {4}
+      dscaleType,                                            // {5}
+      dbiasType,                                             // {6}
+      permutedValueName(layernormBwdAttr.getMEAN()),         // {7}
+      permutedValueName(layernormBwdAttr.getINV_VARIANCE()), // {8}
+      permutedValueName(layernormBwdAttr.getX()),            // {9}
+      permutedValueName(layernormBwdAttr.getDY()),           // {10}
+      permutedValueName(layernormBwdAttr.getSCALE()),        // {11}
+      permutedValueName(layernormBwdAttr.getDX()),           // {12}
+      permutedValueName(layernormBwdAttr.getDSCALE()),       // {13}
+      permutedValueName(layernormBwdAttr.getDBIAS())         // {14}
+  );
+  oss << "\n    " << permuteDX;
+  oss << "\n    " << permuteDScale;
+  oss << "\n    " << permuteDBias;
+  return oss.str();
+}
+
+//===----------------------------------------------------------------------===//
+//
 // RmsNormNode ASM Emitter Methods
 //
 //===----------------------------------------------------------------------===//

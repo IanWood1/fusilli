@@ -34,6 +34,25 @@ TEST_CASE("LayerNormNode getType returns correct type", "[layernorm_node]") {
   REQUIRE(node.getType() == INode::Type::LayerNorm);
 }
 
+TEST_CASE("LayerNormBwdNode getName correctly propagates the attribute name",
+          "[layernorm_bwd_node]") {
+  Context ctx;
+  LayernormBwdAttr attr;
+  attr.setName("foo_layernorm_bwd");
+
+  LayerNormBwdNode node(std::move(attr), ctx);
+  REQUIRE(node.getName() == "foo_layernorm_bwd");
+}
+
+TEST_CASE("LayerNormBwdNode getType returns correct type",
+          "[layernorm_bwd_node]") {
+  Context ctx;
+  LayernormBwdAttr attr;
+
+  LayerNormBwdNode node(std::move(attr), ctx);
+  REQUIRE(node.getType() == INode::Type::LayerNormBwd);
+}
+
 TEST_CASE("LayerNormNode preValidateNode detects missing attributes",
           "[layernorm_node]") {
   Context ctx;
@@ -218,6 +237,79 @@ TEST_CASE("LayerNormNode preValidateNode detects missing attributes",
     LayerNormNode node(std::move(attr), ctx);
 
     FUSILLI_REQUIRE_OK(node.preValidateNode());
+  }
+}
+
+TEST_CASE("LayerNormBwdNode validation and inference", "[layernorm_bwd_node]") {
+  Context ctx;
+  constexpr int64_t n = 2, c = 3, h = 4;
+
+  auto makeAttr = [=] {
+    LayernormBwdAttr attr;
+    attr.setEpsilon(std::make_shared<TensorAttr>(1e-5f));
+    attr.setDY(std::make_shared<TensorAttr>(
+        TensorAttr().setDim({n, c, h}).setStride({c * h, h, 1})));
+    attr.setX(std::make_shared<TensorAttr>(
+        TensorAttr().setDim({n, c, h}).setStride({c * h, h, 1})));
+    attr.setSCALE(std::make_shared<TensorAttr>(
+        TensorAttr().setDim({1, c, h}).setStride({c * h, h, 1})));
+    attr.setMEAN(std::make_shared<TensorAttr>(
+        TensorAttr().setDim({n, 1, 1}).setStride({1, 1, 1})));
+    attr.setINV_VARIANCE(std::make_shared<TensorAttr>(
+        TensorAttr().setDim({n, 1, 1}).setStride({1, 1, 1})));
+    attr.setDX(std::make_shared<TensorAttr>());
+    attr.setDSCALE(std::make_shared<TensorAttr>());
+    attr.setDBIAS(std::make_shared<TensorAttr>());
+    return attr;
+  };
+
+  SECTION("All required attributes present") {
+    LayerNormBwdNode node(makeAttr(), ctx);
+
+    FUSILLI_REQUIRE_OK(node.preValidateNode());
+    FUSILLI_REQUIRE_OK(node.inferPropertiesNode());
+    FUSILLI_REQUIRE_OK(node.postValidateNode());
+
+    REQUIRE(node.layernormBwdAttr.getDX()->getDim() ==
+            std::vector<int64_t>{n, c, h});
+    REQUIRE(node.layernormBwdAttr.getDX()->getStride() ==
+            std::vector<int64_t>{c * h, h, 1});
+    REQUIRE(node.layernormBwdAttr.getDSCALE()->getDim() ==
+            std::vector<int64_t>{1, c, h});
+    REQUIRE(node.layernormBwdAttr.getDSCALE()->getStride() ==
+            std::vector<int64_t>{c * h, h, 1});
+    REQUIRE(node.layernormBwdAttr.getDBIAS()->getDim() ==
+            std::vector<int64_t>{1, c, h});
+    REQUIRE(node.layernormBwdAttr.getDBIAS()->getStride() ==
+            std::vector<int64_t>{c * h, h, 1});
+  }
+
+  SECTION("Missing DY is rejected") {
+    auto attr = makeAttr();
+    attr.setDY(nullptr);
+    LayerNormBwdNode node(std::move(attr), ctx);
+
+    auto status = node.preValidateNode();
+    REQUIRE(isError(status));
+    REQUIRE(status.getCode() == ErrorCode::AttributeNotSet);
+    REQUIRE(status.getMessage() ==
+            "LayerNorm backward input tensor DY not set");
+  }
+
+  SECTION("Incorrect DSCALE shape is rejected") {
+    auto attr = makeAttr();
+    attr.setDSCALE(std::make_shared<TensorAttr>(
+        TensorAttr().setDim({n, c, h}).setStride({c * h, h, 1})));
+    LayerNormBwdNode node(std::move(attr), ctx);
+
+    FUSILLI_REQUIRE_OK(node.preValidateNode());
+    FUSILLI_REQUIRE_OK(node.inferPropertiesNode());
+    auto status = node.postValidateNode();
+    REQUIRE(isError(status));
+    REQUIRE(status.getCode() == ErrorCode::InvalidAttribute);
+    REQUIRE(status.getMessage() ==
+            "LayerNorm backward tensor DSCALE must have shape as tensor X "
+            "with single batch");
   }
 }
 

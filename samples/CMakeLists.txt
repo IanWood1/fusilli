@@ -75,6 +75,7 @@ add_fusilli_samples(
     layernorm/layernorm_train_nchw.cpp
     layernorm/layernorm_train_nchw_scale_bias.cpp
     layernorm/layernorm_train_nhwc_scale_bias.cpp
+    layernorm/layernorm_bwd_nchw.cpp
   DEPS
     libfusilli
     libutils

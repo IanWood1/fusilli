@@ -68,6 +68,45 @@ private:
   NormFwdPhase forwardPhase_ = NormFwdPhase::NOT_SET;
 };
 
+class LayernormBwdAttr : public AttributesCRTP<LayernormBwdAttr> {
+public:
+  // Names for Tensor Inputs and Outputs.
+  enum class InputNames : uint8_t { DY, X, SCALE, MEAN, INV_VARIANCE, EPSILON };
+  enum class OutputNames : uint8_t { DX, DSCALE, DBIAS };
+
+  std::unordered_map<InputNames, std::shared_ptr<TensorAttr>> inputs;
+  std::unordered_map<OutputNames, std::shared_ptr<TensorAttr>> outputs;
+
+  // Setters:
+  FUSILLI_GENERIC_INPUT_TENSOR_SETTER(LayernormBwdAttr, InputNames, DY)
+  FUSILLI_GENERIC_INPUT_TENSOR_SETTER(LayernormBwdAttr, InputNames, X)
+  FUSILLI_GENERIC_INPUT_TENSOR_SETTER(LayernormBwdAttr, InputNames, SCALE)
+  FUSILLI_GENERIC_INPUT_TENSOR_SETTER(LayernormBwdAttr, InputNames, MEAN)
+  FUSILLI_GENERIC_INPUT_TENSOR_SETTER(LayernormBwdAttr, InputNames,
+                                      INV_VARIANCE)
+  FUSILLI_GENERIC_OUTPUT_TENSOR_SETTER(LayernormBwdAttr, OutputNames, DX)
+  FUSILLI_GENERIC_OUTPUT_TENSOR_SETTER(LayernormBwdAttr, OutputNames, DSCALE)
+  FUSILLI_GENERIC_OUTPUT_TENSOR_SETTER(LayernormBwdAttr, OutputNames, DBIAS)
+
+  LayernormBwdAttr &setEpsilon(const std::shared_ptr<TensorAttr> &epsilon) {
+    return setInput(InputNames::EPSILON, epsilon);
+  }
+
+  // Getters:
+  FUSILLI_GENERIC_INPUT_TENSOR_GETTER(InputNames, DY)
+  FUSILLI_GENERIC_INPUT_TENSOR_GETTER(InputNames, X)
+  FUSILLI_GENERIC_INPUT_TENSOR_GETTER(InputNames, SCALE)
+  FUSILLI_GENERIC_INPUT_TENSOR_GETTER(InputNames, MEAN)
+  FUSILLI_GENERIC_INPUT_TENSOR_GETTER(InputNames, INV_VARIANCE)
+  FUSILLI_GENERIC_OUTPUT_TENSOR_GETTER(OutputNames, DX)
+  FUSILLI_GENERIC_OUTPUT_TENSOR_GETTER(OutputNames, DSCALE)
+  FUSILLI_GENERIC_OUTPUT_TENSOR_GETTER(OutputNames, DBIAS)
+
+  std::shared_ptr<TensorAttr> getEpsilon() const {
+    return getInput(InputNames::EPSILON);
+  }
+};
+
 } // namespace fusilli
 
 #endif // FUSILLI_ATTRIBUTES_LAYERNORM_ATTRIBUTES_H
