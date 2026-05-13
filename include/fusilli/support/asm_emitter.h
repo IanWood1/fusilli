@@ -1268,6 +1268,179 @@ inline std::string BatchNormNode::emitNodePreAsm() const {
 
 //===----------------------------------------------------------------------===//
 //
+// BatchNormBwdNode ASM Emitter Methods
+//
+// The torch dialect has `torch.aten.native_batch_norm_backward`, but this
+// worktree does not have torch-to-linalg lowering for it. Emit the training
+// backward formula as primitive Torch ops instead:
+//
+//   x_hat = (x - mean) * invstd
+//   dbias = sum(dy)
+//   dscale = sum(dy * x_hat)
+//   dx = scale * invstd * (dy - dbias / M - x_hat * dscale / M)
+//
+// where reductions are over all axes except C, and M = N * spatial_size.
+//
+//===----------------------------------------------------------------------===//
+
+inline std::string BatchNormBwdNode::getResultNamesAsm() const {
+  std::string suffix = batchnormBwdAttr.getName();
+  return batchnormBwdAttr.getDX()->getValueNameAsm() + "_" + suffix + "_perm" +
+         ", " + batchnormBwdAttr.getDSCALE()->getValueNameAsm() + "_" + suffix +
+         "_perm" + ", " + batchnormBwdAttr.getDBIAS()->getValueNameAsm() + "_" +
+         suffix + "_perm";
+}
+
+inline std::string BatchNormBwdNode::getResultTypesAsm() const {
+  return batchnormBwdAttr.getDX()->getTensorTypeAsm(/*isValueTensor=*/true,
+                                                    /*useLogicalDims=*/true) +
+         ", " +
+         batchnormBwdAttr.getDSCALE()->getTensorTypeAsm(
+             /*isValueTensor=*/true, /*useLogicalDims=*/true) +
+         ", " +
+         batchnormBwdAttr.getDBIAS()->getTensorTypeAsm(
+             /*isValueTensor=*/true, /*useLogicalDims=*/true);
+}
+
+inline std::string BatchNormBwdNode::getReductionDimsOpsAsm() const {
+  return getListOfIntOpsAsm(getReductionDims(), /*prefix=*/"reduction_dims",
+                            /*suffix=*/batchnormBwdAttr.getName());
+}
+
+inline std::string BatchNormBwdNode::getBroadcastShapeOpsAsm() const {
+  return getListOfIntOpsAsm(getBroadcastShape(), /*prefix=*/"broadcast_shape",
+                            /*suffix=*/batchnormBwdAttr.getName());
+}
+
+inline std::string BatchNormBwdNode::emitNodePreAsm() const {
+  std::ostringstream oss;
+  const std::string suffix = batchnormBwdAttr.getName();
+
+  std::shared_ptr<TensorAttr> dyT = batchnormBwdAttr.getDY();
+  std::shared_ptr<TensorAttr> xT = batchnormBwdAttr.getX();
+  std::shared_ptr<TensorAttr> scaleT = batchnormBwdAttr.getSCALE();
+  std::shared_ptr<TensorAttr> meanT = batchnormBwdAttr.getMEAN();
+  std::shared_ptr<TensorAttr> invVarianceT = batchnormBwdAttr.getINV_VARIANCE();
+  std::shared_ptr<TensorAttr> dxT = batchnormBwdAttr.getDX();
+  std::shared_ptr<TensorAttr> dscaleT = batchnormBwdAttr.getDSCALE();
+  std::shared_ptr<TensorAttr> dbiasT = batchnormBwdAttr.getDBIAS();
+
+  const std::string inputType =
+      xT->getTensorTypeAsm(/*isValueTensor=*/true, /*useLogicalDims=*/true);
+  const std::string statsType =
+      scaleT->getTensorTypeAsm(/*isValueTensor=*/true,
+                               /*useLogicalDims=*/true);
+  const std::string broadcastType = buildTensorTypeStr(
+      getBroadcastShape(), scaleT->getDataType(), /*isValueTensor=*/true);
+
+  const std::string dyPerm = dyT->getValueNameAsm() + "_" + suffix + "_perm";
+  const std::string xPerm = xT->getValueNameAsm() + "_" + suffix + "_perm";
+  const std::string dxPerm = dxT->getValueNameAsm() + "_" + suffix + "_perm";
+  const std::string dscalePerm =
+      dscaleT->getValueNameAsm() + "_" + suffix + "_perm";
+  const std::string dbiasPerm =
+      dbiasT->getValueNameAsm() + "_" + suffix + "_perm";
+
+  auto appendBlock = [&](const std::string &block) {
+    oss << "    " << block;
+    if (!block.ends_with('\n'))
+      oss << "\n";
+  };
+  auto appendLine = [&](const std::string &line) {
+    oss << "    " << line << "\n";
+  };
+
+  appendBlock(getReductionDimsOpsAsm());
+  appendBlock(getBroadcastShapeOpsAsm());
+  appendLine(torchIntAsm("alpha", suffix, 1));
+  appendLine(torchBoolAsm("keepdim", suffix, false));
+  appendLine(torchNoneAsm("dtype", suffix));
+  appendLine(torchFloatAsm("reduce_size", suffix,
+                           static_cast<float>(getReductionElementCount())));
+  appendBlock(getLayoutConversionOpsAsm(dyT, "permute_dy", suffix,
+                                        /*isInput=*/true));
+  appendBlock(getLayoutConversionOpsAsm(xT, "permute_x", suffix,
+                                        /*isInput=*/true));
+
+  appendLine(std::format(
+      "%scale_bc_{0} = torch.aten.view {1}, %broadcast_shape_{0} : {2}, "
+      "!torch.list<int> -> {3}",
+      suffix, scaleT->getValueNameAsm(), statsType, broadcastType));
+  appendLine(std::format(
+      "%mean_bc_{0} = torch.aten.view {1}, %broadcast_shape_{0} : {2}, "
+      "!torch.list<int> -> {3}",
+      suffix, meanT->getValueNameAsm(), statsType, broadcastType));
+  appendLine(std::format(
+      "%inv_variance_bc_{0} = torch.aten.view {1}, %broadcast_shape_{0} : "
+      "{2}, !torch.list<int> -> {3}",
+      suffix, invVarianceT->getValueNameAsm(), statsType, broadcastType));
+  appendLine(
+      std::format("%x_centered_{0} = torch.aten.sub.Tensor {1}, %mean_bc_{0}, "
+                  "%alpha_{0} : {2}, {3}, !torch.int -> {2}",
+                  suffix, xPerm, inputType, broadcastType));
+  appendLine(std::format("%x_hat_{0} = torch.aten.mul.Tensor %x_centered_{0}, "
+                         "%inv_variance_bc_{0} : {1}, {2} -> {1}",
+                         suffix, inputType, broadcastType));
+  appendLine(std::format(
+      "{0} = torch.aten.sum.dim_IntList {1}, %reduction_dims_{2}, "
+      "%keepdim_{2}, %dtype_{2} : {3}, !torch.list<int>, !torch.bool, "
+      "!torch.none -> {4}",
+      dbiasPerm, dyPerm, suffix, inputType, statsType));
+  appendLine(std::format(
+      "%dy_x_hat_{0} = torch.aten.mul.Tensor {1}, %x_hat_{0} : {2}, {2} -> "
+      "{2}",
+      suffix, dyPerm, inputType));
+  appendLine(std::format("{0} = torch.aten.sum.dim_IntList %dy_x_hat_{1}, "
+                         "%reduction_dims_{1}, %keepdim_{1}, %dtype_{1} : {2}, "
+                         "!torch.list<int>, !torch.bool, !torch.none -> {3}",
+                         dscalePerm, suffix, inputType, statsType));
+  appendLine(std::format(
+      "%dbias_bc_{0} = torch.aten.view {1}, %broadcast_shape_{0} : {2}, "
+      "!torch.list<int> -> {3}",
+      suffix, dbiasPerm, statsType, broadcastType));
+  appendLine(std::format(
+      "%dscale_bc_{0} = torch.aten.view {1}, %broadcast_shape_{0} : {2}, "
+      "!torch.list<int> -> {3}",
+      suffix, dscalePerm, statsType, broadcastType));
+  appendLine(std::format("%mean_dy_{0} = torch.aten.div.Scalar %dbias_bc_{0}, "
+                         "%reduce_size_{0} : {1}, !torch.float -> {1}",
+                         suffix, broadcastType));
+  appendLine(
+      std::format("%mean_dy_xhat_{0} = torch.aten.div.Scalar %dscale_bc_{0}, "
+                  "%reduce_size_{0} : {1}, !torch.float -> {1}",
+                  suffix, broadcastType));
+  appendLine(std::format(
+      "%dy_minus_mean_{0} = torch.aten.sub.Tensor {1}, %mean_dy_{0}, "
+      "%alpha_{0} : {2}, {3}, !torch.int -> {2}",
+      suffix, dyPerm, inputType, broadcastType));
+  appendLine(
+      std::format("%xhat_mean_dy_xhat_{0} = torch.aten.mul.Tensor %x_hat_{0}, "
+                  "%mean_dy_xhat_{0} : {1}, {2} -> {1}",
+                  suffix, inputType, broadcastType));
+  appendLine(std::format(
+      "%dx_inner_{0} = torch.aten.sub.Tensor %dy_minus_mean_{0}, "
+      "%xhat_mean_dy_xhat_{0}, %alpha_{0} : {1}, {1}, !torch.int -> {1}",
+      suffix, inputType));
+  appendLine(std::format(
+      "%scale_inv_variance_{0} = torch.aten.mul.Tensor %scale_bc_{0}, "
+      "%inv_variance_bc_{0} : {1}, {1} -> {1}",
+      suffix, broadcastType));
+  appendLine(std::format(
+      "{0} = torch.aten.mul.Tensor %dx_inner_{1}, %scale_inv_variance_{1} : "
+      "{2}, {3} -> {2}",
+      dxPerm, suffix, inputType, broadcastType));
+  appendBlock(getLayoutConversionOpsAsm(dxT, "permute_dx", suffix,
+                                        /*isInput=*/false));
+  appendBlock(getLayoutConversionOpsAsm(dscaleT, "permute_dscale", suffix,
+                                        /*isInput=*/false));
+  appendBlock(getLayoutConversionOpsAsm(dbiasT, "permute_dbias", suffix,
+                                        /*isInput=*/false));
+
+  return "\n" + oss.str();
+}
+
+//===----------------------------------------------------------------------===//
+//
 // LayerNormNode ASM Emitter Methods
 //
 //===----------------------------------------------------------------------===//

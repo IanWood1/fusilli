@@ -47,6 +47,7 @@
 #include "fusilli/support/extras.h"
 #include "fusilli/support/logging.h"
 
+#include <array>
 #include <cstdlib>
 #include <filesystem>
 #include <memory>
@@ -352,6 +353,13 @@ public:
             const std::shared_ptr<TensorAttr> &bias,
             const std::shared_ptr<TensorAttr> &mean,
             const std::shared_ptr<TensorAttr> &var, BatchnormAttr &attributes);
+  std::array<std::shared_ptr<TensorAttr>, 3>
+  batchnormBwd(const std::shared_ptr<TensorAttr> &dy,
+               const std::shared_ptr<TensorAttr> &x,
+               const std::shared_ptr<TensorAttr> &scale,
+               const std::shared_ptr<TensorAttr> &mean,
+               const std::shared_ptr<TensorAttr> &invVariance,
+               BatchnormBwdAttr &attributes);
 
   std::array<std::shared_ptr<TensorAttr>, 3>
   layernorm(const std::shared_ptr<TensorAttr> &x,
@@ -899,6 +907,53 @@ Graph::batchnorm(const std::shared_ptr<TensorAttr> &x,
       std::make_unique<BatchNormNode>(std::move(batchnormAttr), context));
 
   return {std::move(y), std::move(savedMean), std::move(savedInvVar)};
+}
+
+// Create a BatchNormBwdNode, populate it with the specified attributes, create
+// output tensors and add the node to the graph's sub nodes.
+inline std::array<std::shared_ptr<TensorAttr>, 3>
+Graph::batchnormBwd(const std::shared_ptr<TensorAttr> &dy,
+                    const std::shared_ptr<TensorAttr> &x,
+                    const std::shared_ptr<TensorAttr> &scale,
+                    const std::shared_ptr<TensorAttr> &mean,
+                    const std::shared_ptr<TensorAttr> &invVariance,
+                    BatchnormBwdAttr &batchnormBwdAttr) {
+  // Populate names when not set.
+  if (batchnormBwdAttr.getName().empty())
+    batchnormBwdAttr.setName("batchnorm_bwd_" +
+                             std::to_string(subNodes_.size()));
+  if (dy && dy->getName().empty())
+    dy->setName(batchnormBwdAttr.getName() + "_DY");
+  if (x && x->getName().empty())
+    x->setName(batchnormBwdAttr.getName() + "_X");
+  if (scale && scale->getName().empty())
+    scale->setName(batchnormBwdAttr.getName() + "_SCALE");
+  if (mean && mean->getName().empty())
+    mean->setName(batchnormBwdAttr.getName() + "_MEAN");
+  if (invVariance && invVariance->getName().empty())
+    invVariance->setName(batchnormBwdAttr.getName() + "_INV_VARIANCE");
+
+  FUSILLI_LOG_LABEL_ENDL("INFO: Adding BatchNormBwd '"
+                         << batchnormBwdAttr.getName() << "' to Graph");
+
+  // Set inputs.
+  batchnormBwdAttr.setDY(dy)
+      .setX(x)
+      .setSCALE(scale)
+      .setMEAN(mean)
+      .setINV_VARIANCE(invVariance);
+
+  // Set outputs.
+  auto dx = outputTensor(batchnormBwdAttr.getName() + "_DX");
+  auto dscale = outputTensor(batchnormBwdAttr.getName() + "_DSCALE");
+  auto dbias = outputTensor(batchnormBwdAttr.getName() + "_DBIAS");
+  batchnormBwdAttr.setDX(dx).setDSCALE(dscale).setDBIAS(dbias);
+
+  // Create node and add to Graph's subNodes_.
+  subNodes_.emplace_back(
+      std::make_unique<BatchNormBwdNode>(std::move(batchnormBwdAttr), context));
+
+  return {std::move(dx), std::move(dscale), std::move(dbias)};
 }
 
 // Create a LayerNormNode, populate it with the specified attributes, create

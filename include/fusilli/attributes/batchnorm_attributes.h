@@ -89,6 +89,37 @@ private:
   NormFwdPhase forwardPhase_ = NormFwdPhase::NOT_SET;
 };
 
+class BatchnormBwdAttr : public AttributesCRTP<BatchnormBwdAttr> {
+public:
+  // Names for Tensor Inputs and Outputs.
+  enum class InputNames : uint8_t { DY, X, SCALE, MEAN, INV_VARIANCE };
+  enum class OutputNames : uint8_t { DX, DSCALE, DBIAS };
+
+  std::unordered_map<InputNames, std::shared_ptr<TensorAttr>> inputs;
+  std::unordered_map<OutputNames, std::shared_ptr<TensorAttr>> outputs;
+
+  // Setters:
+  FUSILLI_GENERIC_INPUT_TENSOR_SETTER(BatchnormBwdAttr, InputNames, DY)
+  FUSILLI_GENERIC_INPUT_TENSOR_SETTER(BatchnormBwdAttr, InputNames, X)
+  FUSILLI_GENERIC_INPUT_TENSOR_SETTER(BatchnormBwdAttr, InputNames, SCALE)
+  FUSILLI_GENERIC_INPUT_TENSOR_SETTER(BatchnormBwdAttr, InputNames, MEAN)
+  FUSILLI_GENERIC_INPUT_TENSOR_SETTER(BatchnormBwdAttr, InputNames,
+                                      INV_VARIANCE)
+  FUSILLI_GENERIC_OUTPUT_TENSOR_SETTER(BatchnormBwdAttr, OutputNames, DX)
+  FUSILLI_GENERIC_OUTPUT_TENSOR_SETTER(BatchnormBwdAttr, OutputNames, DSCALE)
+  FUSILLI_GENERIC_OUTPUT_TENSOR_SETTER(BatchnormBwdAttr, OutputNames, DBIAS)
+
+  // Getters:
+  FUSILLI_GENERIC_INPUT_TENSOR_GETTER(InputNames, DY)
+  FUSILLI_GENERIC_INPUT_TENSOR_GETTER(InputNames, X)
+  FUSILLI_GENERIC_INPUT_TENSOR_GETTER(InputNames, SCALE)
+  FUSILLI_GENERIC_INPUT_TENSOR_GETTER(InputNames, MEAN)
+  FUSILLI_GENERIC_INPUT_TENSOR_GETTER(InputNames, INV_VARIANCE)
+  FUSILLI_GENERIC_OUTPUT_TENSOR_GETTER(OutputNames, DX)
+  FUSILLI_GENERIC_OUTPUT_TENSOR_GETTER(OutputNames, DSCALE)
+  FUSILLI_GENERIC_OUTPUT_TENSOR_GETTER(OutputNames, DBIAS)
+};
+
 } // namespace fusilli
 
 #endif // FUSILLI_ATTRIBUTES_BATCHNORM_ATTRIBUTES_H

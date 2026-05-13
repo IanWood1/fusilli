@@ -84,6 +84,7 @@ add_fusilli_samples(
 add_fusilli_samples(
   PREFIX fusilli_batchnorm_samples
   SRCS
+    batchnorm/batchnorm_bwd_nchw_scale.cpp
     batchnorm/batchnorm_infer_nchw.cpp
     batchnorm/batchnorm_infer_nchw_scale_bias.cpp
     batchnorm/batchnorm_infer_nhwc_scale_bias.cpp

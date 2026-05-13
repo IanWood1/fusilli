@@ -194,6 +194,7 @@ add_fusilli_lit_tests(
     lit/test_conv_wgrad_asm_emitter_nhwc_krsc_grouped_strided.cpp
     lit/test_conv_dgrad_asm_emitter_nhwc_kcrs.cpp
     lit/test_conv_dgrad_asm_emitter_nhwc_kcrs_grouped.cpp
+    lit/test_batchnorm_bwd_asm_emitter_nchw.cpp
     lit/test_batchnorm_infer_asm_emitter_nchw.cpp
     # TODO(iree-org/iree#24008): batchnorm training fails to distribute.
     # lit/test_batchnorm_train_asm_emitter_nchw.cpp

@@ -74,3 +74,51 @@ TEST_CASE("BatchnormAttr optional tensors default to null",
   REQUIRE(attr.getSAVED_MEAN() == nullptr);
   REQUIRE(attr.getSAVED_INV_VARIANCE() == nullptr);
 }
+
+TEST_CASE("BatchnormBwdAttr default constructor", "[batchnorm_bwd_attr]") {
+  BatchnormBwdAttr attr;
+  REQUIRE(attr.inputs.empty());
+  REQUIRE(attr.outputs.empty());
+}
+
+TEST_CASE("BatchnormBwdAttr setters and getters", "[batchnorm_bwd_attr]") {
+  BatchnormBwdAttr attr;
+
+  auto dy = std::make_shared<TensorAttr>(1.0f);
+  auto x = std::make_shared<TensorAttr>(2.0f);
+  auto scale = std::make_shared<TensorAttr>(3.0f);
+  auto mean = std::make_shared<TensorAttr>(4.0f);
+  auto invVariance = std::make_shared<TensorAttr>(5.0f);
+  auto dx = std::make_shared<TensorAttr>(6.0f);
+  auto dscale = std::make_shared<TensorAttr>(7.0f);
+  auto dbias = std::make_shared<TensorAttr>(8.0f);
+
+  attr.setDY(dy).setX(x).setSCALE(scale).setMEAN(mean).setINV_VARIANCE(
+      invVariance);
+  attr.setDX(dx).setDSCALE(dscale).setDBIAS(dbias);
+
+  REQUIRE(attr.inputs.size() == 5);
+  REQUIRE(attr.outputs.size() == 3);
+
+  REQUIRE(attr.getDY() == dy);
+  REQUIRE(attr.getX() == x);
+  REQUIRE(attr.getSCALE() == scale);
+  REQUIRE(attr.getMEAN() == mean);
+  REQUIRE(attr.getINV_VARIANCE() == invVariance);
+  REQUIRE(attr.getDX() == dx);
+  REQUIRE(attr.getDSCALE() == dscale);
+  REQUIRE(attr.getDBIAS() == dbias);
+}
+
+TEST_CASE("BatchnormBwdAttr optional tensors default to null",
+          "[batchnorm_bwd_attr]") {
+  BatchnormBwdAttr attr;
+  REQUIRE(attr.getDY() == nullptr);
+  REQUIRE(attr.getX() == nullptr);
+  REQUIRE(attr.getSCALE() == nullptr);
+  REQUIRE(attr.getMEAN() == nullptr);
+  REQUIRE(attr.getINV_VARIANCE() == nullptr);
+  REQUIRE(attr.getDX() == nullptr);
+  REQUIRE(attr.getDSCALE() == nullptr);
+  REQUIRE(attr.getDBIAS() == nullptr);
+}

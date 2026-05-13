@@ -100,6 +100,58 @@ generateNchwForTrainForward(int64_t n, int64_t c, int64_t h, int64_t w,
   return {inputVals, expectedVals, savedMeanVals, savedInvVarVals};
 }
 
+// Generates input and expected output tensors for BatchNorm backward in NCHW
+// physical memory order.
+//
+// Fill pattern: X and DY use the same two-value pattern per channel as training
+// forward: the first half of N*H*W is -1 and the second half is +1. Saved
+// mean is 0 and saved inverse variance is 1 / sqrt(1 + eps), matching the
+// forward helper's variance of 1.
+//
+// Returns: dyVals, xVals, savedMeanVals, savedInvVarVals, expectedDxVals,
+//          expectedDscaleVals [C], expectedDbiasVals [C].
+inline std::tuple<std::vector<float>, std::vector<float>, std::vector<float>,
+                  std::vector<float>, std::vector<float>, std::vector<float>,
+                  std::vector<float>>
+generateNchwForBackward(int64_t n, int64_t c, int64_t h, int64_t w, float scale,
+                        float eps) {
+  assert(n * h * w % 2 == 0 && "n * h * w must be even for two-value pattern");
+
+  const size_t totalSize = static_cast<size_t>(n * c * h * w);
+  std::vector<float> dyVals(totalSize), xVals(totalSize),
+      expectedDxVals(totalSize);
+  std::vector<float> expectedDscaleVals(c), expectedDbiasVals(c, 0.0f);
+
+  const float invStd = 1.0f / std::sqrt(1.0f + eps);
+  const int64_t halfNHW = n * h * w / 2;
+  const float reductionSize = static_cast<float>(n * h * w);
+  const float dscale = reductionSize * invStd;
+  const float dxMagnitude = scale * invStd * (1.0f - invStd * invStd);
+
+  for (int64_t ni = 0; ni < n; ++ni) {
+    for (int64_t ci = 0; ci < c; ++ci) {
+      for (int64_t hi = 0; hi < h; ++hi) {
+        for (int64_t wi = 0; wi < w; ++wi) {
+          int64_t spatialIdx = ni * h * w + hi * w + wi;
+          float val = (spatialIdx < halfNHW) ? -1.0f : 1.0f;
+          int64_t idx = ni * c * h * w + ci * h * w + hi * w + wi;
+          dyVals[idx] = val;
+          xVals[idx] = val;
+          expectedDxVals[idx] = dxMagnitude * val;
+        }
+      }
+      expectedDscaleVals[ci] = dscale;
+    }
+  }
+
+  std::vector<float> savedMeanVals(c, 0.0f);
+  std::vector<float> savedInvVarVals(c, invStd);
+
+  return {dyVals,           xVals,          savedMeanVals,
+          savedInvVarVals,  expectedDxVals, expectedDscaleVals,
+          expectedDbiasVals};
+}
+
 } // namespace fusilli::batchnorm_utils
 
 #endif // FUSILLI_SAMPLES_BATCHNORM_BATCHNORM_UTILS_H

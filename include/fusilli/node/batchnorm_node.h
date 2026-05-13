@@ -246,6 +246,202 @@ private:
   int64_t getChannelDim() const { return batchnormAttr.getX()->getDim()[1]; }
 };
 
+//===----------------------------------------------------------------------===//
+// Batch normalization backward-gradient node.
+//
+// Computes gradients for training-mode batch norm from:
+//   DY, X, SCALE, saved MEAN, saved INV_VARIANCE
+// and returns:
+//   DX, DSCALE, DBIAS.
+//
+// The saved statistics are 1D tensors of shape [C] produced by BatchNorm
+// training. `INV_VARIANCE` follows the existing Fusilli forward naming and is
+// the inverse standard deviation used by PyTorch native batch norm.
+//===----------------------------------------------------------------------===//
+
+class BatchNormBwdNode : public NodeCRTP<BatchNormBwdNode> {
+public:
+  BatchnormBwdAttr batchnormBwdAttr;
+
+  BatchNormBwdNode(BatchnormBwdAttr &&attr, const Context &ctx)
+      : NodeCRTP(ctx), batchnormBwdAttr(std::move(attr)) {}
+
+  // ASM emitter methods.
+  std::string emitNodePreAsm() const override final;
+  std::string getResultNamesAsm() const;
+  std::string getResultTypesAsm() const;
+  std::string getReductionDimsOpsAsm() const;
+  std::string getBroadcastShapeOpsAsm() const;
+
+  const std::string &getName() const override final {
+    return batchnormBwdAttr.getName();
+  }
+  Type getType() const override final { return Type::BatchNormBwd; }
+
+  ErrorObject preValidateNode() const override final {
+    FUSILLI_LOG_LABEL_ENDL("INFO: Pre-Validating BatchNormBwdNode '"
+                           << batchnormBwdAttr.getName() << "'");
+
+    std::shared_ptr<TensorAttr> dyT = batchnormBwdAttr.getDY();
+    std::shared_ptr<TensorAttr> xT = batchnormBwdAttr.getX();
+    std::shared_ptr<TensorAttr> scaleT = batchnormBwdAttr.getSCALE();
+    std::shared_ptr<TensorAttr> meanT = batchnormBwdAttr.getMEAN();
+    std::shared_ptr<TensorAttr> invVarianceT =
+        batchnormBwdAttr.getINV_VARIANCE();
+    std::shared_ptr<TensorAttr> dxT = batchnormBwdAttr.getDX();
+    std::shared_ptr<TensorAttr> dscaleT = batchnormBwdAttr.getDSCALE();
+    std::shared_ptr<TensorAttr> dbiasT = batchnormBwdAttr.getDBIAS();
+
+    FUSILLI_RETURN_ERROR_IF(!dyT, ErrorCode::AttributeNotSet,
+                            "BatchNormBwd gradient tensor DY not set");
+    FUSILLI_RETURN_ERROR_IF(!xT, ErrorCode::AttributeNotSet,
+                            "BatchNormBwd input tensor X not set");
+    FUSILLI_RETURN_ERROR_IF(!scaleT, ErrorCode::AttributeNotSet,
+                            "BatchNormBwd input tensor SCALE not set");
+    FUSILLI_RETURN_ERROR_IF(!meanT, ErrorCode::AttributeNotSet,
+                            "BatchNormBwd input tensor MEAN not set");
+    FUSILLI_RETURN_ERROR_IF(!invVarianceT, ErrorCode::AttributeNotSet,
+                            "BatchNormBwd input tensor INV_VARIANCE not set");
+    FUSILLI_RETURN_ERROR_IF(!dxT, ErrorCode::AttributeNotSet,
+                            "BatchNormBwd output tensor DX not set");
+    FUSILLI_RETURN_ERROR_IF(!dscaleT, ErrorCode::AttributeNotSet,
+                            "BatchNormBwd output tensor DSCALE not set");
+    FUSILLI_RETURN_ERROR_IF(!dbiasT, ErrorCode::AttributeNotSet,
+                            "BatchNormBwd output tensor DBIAS not set");
+
+    size_t dyRank = dyT->getDim().size();
+    size_t xRank = xT->getDim().size();
+    FUSILLI_RETURN_ERROR_IF(
+        dyRank < 2 || xRank < 2, ErrorCode::InvalidAttribute,
+        "BatchNormBwd input tensors DY/X must have a rank of at least 2");
+    FUSILLI_RETURN_ERROR_IF(dyRank != xRank, ErrorCode::InvalidAttribute,
+                            "BatchNormBwd tensors DY and X have different "
+                            "ranks");
+
+    FUSILLI_RETURN_ERROR_IF(!isSupportedLayout(dyT), ErrorCode::NotImplemented,
+                            "Tensor '" + dyT->getName() +
+                                "' is neither contiguous nor channels-last as "
+                                "defined by its stride");
+    FUSILLI_RETURN_ERROR_IF(!isSupportedLayout(xT), ErrorCode::NotImplemented,
+                            "Tensor '" + xT->getName() +
+                                "' is neither contiguous nor channels-last as "
+                                "defined by its stride");
+
+    return ok();
+  }
+
+  ErrorObject inferPropertiesNode() override final {
+    FUSILLI_LOG_LABEL_ENDL("INFO: Inferring properties for BatchNormBwdNode '"
+                           << batchnormBwdAttr.getName() << "'");
+
+    batchnormBwdAttr.fillFromContext(context);
+
+    std::shared_ptr<TensorAttr> xT = batchnormBwdAttr.getX();
+    std::shared_ptr<TensorAttr> dxT = batchnormBwdAttr.getDX();
+    const std::vector<int64_t> &xDim = xT->getDim();
+
+    const std::vector<int64_t> channel1DDim = {xDim[1]};
+    const std::vector<int64_t> channel1DStride = {1};
+
+    auto infer1DTensor = [&](const std::shared_ptr<TensorAttr> &t) {
+      if (t->getDim().empty())
+        t->setDim(channel1DDim);
+      if (t->getStride().empty())
+        t->setStride(channel1DStride);
+    };
+
+    infer1DTensor(batchnormBwdAttr.getSCALE());
+    infer1DTensor(batchnormBwdAttr.getMEAN());
+    infer1DTensor(batchnormBwdAttr.getINV_VARIANCE());
+    infer1DTensor(batchnormBwdAttr.getDSCALE());
+    infer1DTensor(batchnormBwdAttr.getDBIAS());
+
+    if (dxT->getDim().empty())
+      dxT->setDim(xDim);
+    if (dxT->getStride().empty())
+      dxT->setStride(xT->getStride());
+
+    return ok();
+  }
+
+  ErrorObject postValidateNode() const override final {
+    FUSILLI_LOG_LABEL_ENDL("INFO: Post-Validating BatchNormBwdNode '"
+                           << batchnormBwdAttr.getName() << "'");
+
+    std::shared_ptr<TensorAttr> dyT = batchnormBwdAttr.getDY();
+    std::shared_ptr<TensorAttr> xT = batchnormBwdAttr.getX();
+    std::shared_ptr<TensorAttr> dxT = batchnormBwdAttr.getDX();
+
+    const std::vector<int64_t> &xDim = xT->getDim();
+    const std::vector<int64_t> expectedCDim = {xDim[1]};
+
+    FUSILLI_RETURN_ERROR_IF(
+        dyT->getDim() != xDim, ErrorCode::InvalidAttribute,
+        "BatchNormBwd gradient tensor DY must have the same shape as input X "
+        "tensor");
+    FUSILLI_RETURN_ERROR_IF(
+        dxT->getDim() != xDim, ErrorCode::InvalidAttribute,
+        "BatchNormBwd output tensor DX must have the same shape as input X "
+        "tensor");
+
+    FUSILLI_RETURN_ERROR_IF(!isSupportedLayout(dxT), ErrorCode::NotImplemented,
+                            "Tensor '" + dxT->getName() +
+                                "' is neither contiguous nor channels-last as "
+                                "defined by its stride");
+
+    auto check1DShape = [&](const std::shared_ptr<TensorAttr> &t,
+                            const std::string &name) -> ErrorObject {
+      FUSILLI_RETURN_ERROR_IF(
+          t->getDim() != expectedCDim, ErrorCode::InvalidAttribute,
+          "BatchNormBwd tensor " + name +
+              " must be 1D with size equal to channel dimension C");
+      FUSILLI_RETURN_ERROR_IF(t->getStride() != std::vector<int64_t>{1},
+                              ErrorCode::InvalidAttribute,
+                              "BatchNormBwd tensor " + name +
+                                  " must have unit stride");
+      return ok();
+    };
+
+    FUSILLI_CHECK_ERROR(check1DShape(batchnormBwdAttr.getSCALE(), "SCALE"));
+    FUSILLI_CHECK_ERROR(check1DShape(batchnormBwdAttr.getMEAN(), "MEAN"));
+    FUSILLI_CHECK_ERROR(
+        check1DShape(batchnormBwdAttr.getINV_VARIANCE(), "INV_VARIANCE"));
+    FUSILLI_CHECK_ERROR(check1DShape(batchnormBwdAttr.getDSCALE(), "DSCALE"));
+    FUSILLI_CHECK_ERROR(check1DShape(batchnormBwdAttr.getDBIAS(), "DBIAS"));
+
+    return ok();
+  }
+
+private:
+  static bool isSupportedLayout(const std::shared_ptr<TensorAttr> &t) {
+    return t->isContiguous() ||
+           (t->getDim().size() >= 3 && t->isChannelsLast());
+  }
+
+  std::vector<int64_t> getReductionDims() const {
+    const size_t rank = batchnormBwdAttr.getX()->getDim().size();
+    std::vector<int64_t> dims = {0};
+    for (size_t i = 2; i < rank; ++i)
+      dims.push_back(static_cast<int64_t>(i));
+    return dims;
+  }
+
+  std::vector<int64_t> getBroadcastShape() const {
+    const std::vector<int64_t> &xDim = batchnormBwdAttr.getX()->getDim();
+    std::vector<int64_t> shape(xDim.size(), 1);
+    shape[1] = xDim[1];
+    return shape;
+  }
+
+  int64_t getReductionElementCount() const {
+    const std::vector<int64_t> &xDim = batchnormBwdAttr.getX()->getDim();
+    int64_t count = xDim[0];
+    for (size_t i = 2; i < xDim.size(); ++i)
+      count *= xDim[i];
+    return count;
+  }
+};
+
 } // namespace fusilli
 
 #endif // FUSILLI_NODE_BATCHNORM_NODE_H
