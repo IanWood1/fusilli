@@ -218,6 +218,214 @@ private:
   }
 };
 
+//===----------------------------------------------------------------------===//
+// RMS normalization backward node.
+//===----------------------------------------------------------------------===//
+
+class RmsNormBwdNode : public NodeCRTP<RmsNormBwdNode> {
+public:
+  RmsnormBwdAttr rmsnormBwdAttr;
+
+  RmsNormBwdNode(RmsnormBwdAttr &&attr, const Context &ctx)
+      : NodeCRTP(ctx), rmsnormBwdAttr(std::move(attr)) {}
+
+  // ASM emitter methods.
+  std::string emitNodePreAsm() const override final;
+  std::string getOperandNamesAsm() const;
+  std::string getOperandTypesAsm() const;
+  std::string getResultNamesAsm() const;
+  std::string getResultTypesAsm() const;
+  std::string getNormalizedReduceDimOpsAsm() const;
+  std::string getBatchReduceDimOpsAsm() const;
+
+  const std::string &getName() const override final {
+    return rmsnormBwdAttr.getName();
+  }
+  Type getType() const override final { return Type::RmsNormBwd; }
+
+  ErrorObject preValidateNode() const override final {
+    FUSILLI_LOG_LABEL_ENDL("INFO: Pre-Validating RmsNormBwdNode '"
+                           << rmsnormBwdAttr.getName() << "'");
+
+    std::shared_ptr<TensorAttr> dyT = rmsnormBwdAttr.getDY();
+    std::shared_ptr<TensorAttr> xT = rmsnormBwdAttr.getX();
+    std::shared_ptr<TensorAttr> sT = rmsnormBwdAttr.getSCALE();
+    std::shared_ptr<TensorAttr> rT = rmsnormBwdAttr.getINV_RMS();
+    std::shared_ptr<TensorAttr> dxT = rmsnormBwdAttr.getDX();
+    std::shared_ptr<TensorAttr> dsT = rmsnormBwdAttr.getDSCALE();
+
+    FUSILLI_RETURN_ERROR_IF(!dyT, ErrorCode::AttributeNotSet,
+                            "RmsNormBwd input tensor DY not set");
+    FUSILLI_RETURN_ERROR_IF(!xT, ErrorCode::AttributeNotSet,
+                            "RmsNormBwd input tensor X not set");
+    FUSILLI_RETURN_ERROR_IF(!sT, ErrorCode::AttributeNotSet,
+                            "RmsNormBwd input tensor SCALE not set");
+    FUSILLI_RETURN_ERROR_IF(!rT, ErrorCode::AttributeNotSet,
+                            "RmsNormBwd input tensor INV_RMS not set");
+    FUSILLI_RETURN_ERROR_IF(!dxT, ErrorCode::AttributeNotSet,
+                            "RmsNormBwd output tensor DX not set");
+    FUSILLI_RETURN_ERROR_IF(!dsT, ErrorCode::AttributeNotSet,
+                            "RmsNormBwd output tensor DSCALE not set");
+
+    const std::vector<int64_t> &xDim = xT->getDim();
+    FUSILLI_RETURN_ERROR_IF(
+        xDim.size() < 2, ErrorCode::InvalidAttribute,
+        "RmsNormBwd input tensor X must have a rank of at least 2");
+    FUSILLI_RETURN_ERROR_IF(!xT->isContiguous() && !xT->isChannelsLast(),
+                            ErrorCode::NotImplemented,
+                            "Tensor '" + xT->getName() +
+                                "' is neither contiguous nor channels-last as "
+                                "defined by its stride");
+
+    FUSILLI_RETURN_ERROR_IF(!dyT->getDim().empty() && dyT->getDim() != xDim,
+                            ErrorCode::InvalidAttribute,
+                            "RmsNormBwd input tensor DY must have the same "
+                            "shape as input X tensor");
+    if (!dyT->getStride().empty()) {
+      FUSILLI_RETURN_ERROR_IF(
+          !dyT->isContiguous() && !dyT->isChannelsLast(),
+          ErrorCode::NotImplemented,
+          "Tensor '" + dyT->getName() +
+              "' is neither contiguous nor channels-last as "
+              "defined by its stride");
+    }
+
+    if (!sT->getDim().empty()) {
+      FUSILLI_RETURN_ERROR_IF(
+          sT->getDim() != norm_utils::getScaleBiasDim(xDim),
+          ErrorCode::InvalidAttribute,
+          "RmsNormBwd input tensor SCALE must have shape as tensor X with "
+          "single batch");
+    }
+    if (!sT->getStride().empty()) {
+      FUSILLI_RETURN_ERROR_IF(
+          !sT->isContiguous() && !sT->isChannelsLast(),
+          ErrorCode::NotImplemented,
+          "Tensor '" + sT->getName() +
+              "' is neither contiguous nor channels-last as "
+              "defined by its stride");
+    }
+
+    const auto invRmsDimAndStride =
+        norm_utils::getTrainingForwardOutputDimAndStride(xDim);
+    const auto &rDim = invRmsDimAndStride.first;
+    const auto &rStride = invRmsDimAndStride.second;
+    FUSILLI_RETURN_ERROR_IF(
+        !rT->getDim().empty() && rT->getDim() != rDim,
+        ErrorCode::InvalidAttribute,
+        "RmsNormBwd input tensor INV_RMS must have shape [B, 1, ..., 1] with "
+        "rank equal to input X tensor's rank, and batch dimension equal "
+        "to input X tensor's batch dimension");
+    FUSILLI_RETURN_ERROR_IF(
+        !rT->getStride().empty() && rT->getStride() != rStride,
+        ErrorCode::InvalidAttribute,
+        "RmsNormBwd input tensor INV_RMS must have unit strides");
+
+    return ok();
+  }
+
+  ErrorObject inferPropertiesNode() override final {
+    FUSILLI_LOG_LABEL_ENDL("INFO: Inferring properties for RmsNormBwdNode '"
+                           << rmsnormBwdAttr.getName() << "'");
+
+    rmsnormBwdAttr.fillFromContext(context);
+
+    std::shared_ptr<TensorAttr> xT = rmsnormBwdAttr.getX();
+    const std::vector<int64_t> &xDim = xT->getDim();
+
+    std::shared_ptr<TensorAttr> dyT = rmsnormBwdAttr.getDY();
+    norm_utils::inferDimAndStride(dyT, xDim, xT->getStride());
+
+    std::shared_ptr<TensorAttr> sT = rmsnormBwdAttr.getSCALE();
+    norm_utils::inferScaleBiasDimAndStride(sT, xDim, xT->getStride());
+
+    const auto invRmsDimAndStride =
+        norm_utils::getTrainingForwardOutputDimAndStride(xDim);
+    const auto &rDim = invRmsDimAndStride.first;
+    const auto &rStride = invRmsDimAndStride.second;
+    std::shared_ptr<TensorAttr> rT = rmsnormBwdAttr.getINV_RMS();
+    norm_utils::inferDimAndStride(rT, rDim, rStride);
+
+    std::shared_ptr<TensorAttr> dxT = rmsnormBwdAttr.getDX();
+    norm_utils::inferDimAndStride(dxT, xDim, xT->getStride());
+
+    std::shared_ptr<TensorAttr> dsT = rmsnormBwdAttr.getDSCALE();
+    norm_utils::inferDimAndStride(dsT, sT->getDim(), sT->getStride());
+
+    return ok();
+  }
+
+  ErrorObject postValidateNode() const override final {
+    FUSILLI_LOG_LABEL_ENDL("INFO: Post-Validating RmsNormBwdNode '"
+                           << rmsnormBwdAttr.getName() << "'");
+
+    std::shared_ptr<TensorAttr> xT = rmsnormBwdAttr.getX();
+    std::shared_ptr<TensorAttr> dyT = rmsnormBwdAttr.getDY();
+    std::shared_ptr<TensorAttr> sT = rmsnormBwdAttr.getSCALE();
+    std::shared_ptr<TensorAttr> rT = rmsnormBwdAttr.getINV_RMS();
+    std::shared_ptr<TensorAttr> dxT = rmsnormBwdAttr.getDX();
+    std::shared_ptr<TensorAttr> dsT = rmsnormBwdAttr.getDSCALE();
+
+    const std::vector<int64_t> &xDim = xT->getDim();
+    FUSILLI_RETURN_ERROR_IF(dyT->getDim() != xDim, ErrorCode::InvalidAttribute,
+                            "RmsNormBwd input tensor DY must have the same "
+                            "shape as input X tensor");
+    FUSILLI_RETURN_ERROR_IF(dxT->getDim() != xDim, ErrorCode::InvalidAttribute,
+                            "RmsNormBwd output DX tensor must have the same "
+                            "shape as input X tensor");
+    FUSILLI_RETURN_ERROR_IF(
+        dsT->getDim() != sT->getDim(), ErrorCode::InvalidAttribute,
+        "RmsNormBwd output DSCALE tensor must have the same shape as input "
+        "SCALE tensor");
+
+    const auto invRmsDimAndStride =
+        norm_utils::getTrainingForwardOutputDimAndStride(xDim);
+    const auto &rDim = invRmsDimAndStride.first;
+    const auto &rStride = invRmsDimAndStride.second;
+    FUSILLI_RETURN_ERROR_IF(
+        rT->getDim() != rDim, ErrorCode::InvalidAttribute,
+        "RmsNormBwd input tensor INV_RMS must have shape [B, 1, ..., 1] with "
+        "rank equal to input X tensor's rank, and batch dimension equal "
+        "to input X tensor's batch dimension");
+    FUSILLI_RETURN_ERROR_IF(
+        rT->getStride() != rStride, ErrorCode::InvalidAttribute,
+        "RmsNormBwd input tensor INV_RMS must have unit strides");
+
+    FUSILLI_RETURN_ERROR_IF(!dxT->isContiguous() && !dxT->isChannelsLast(),
+                            ErrorCode::NotImplemented,
+                            "Tensor '" + dxT->getName() +
+                                "' is neither contiguous nor channels-last as "
+                                "defined by its stride");
+    FUSILLI_RETURN_ERROR_IF(!dsT->isContiguous() && !dsT->isChannelsLast(),
+                            ErrorCode::NotImplemented,
+                            "Tensor '" + dsT->getName() +
+                                "' is neither contiguous nor channels-last as "
+                                "defined by its stride");
+
+    return ok();
+  }
+
+private:
+  std::vector<int64_t> getNormalizedAxes() const {
+    const size_t xRank = rmsnormBwdAttr.getX()->getDim().size();
+    std::vector<int64_t> axes;
+    axes.reserve(xRank - 1);
+    for (size_t i = 1; i < xRank; ++i)
+      axes.push_back(static_cast<int64_t>(i));
+    return axes;
+  }
+
+  std::vector<int64_t> getBatchReduceAxes() const { return {0}; }
+
+  int64_t getNormalizedElementCount() const {
+    const std::vector<int64_t> &xDim = rmsnormBwdAttr.getX()->getDim();
+    int64_t count = 1;
+    for (size_t i = 1; i < xDim.size(); ++i)
+      count *= xDim[i];
+    return count;
+  }
+};
+
 } // namespace fusilli
 
 #endif // FUSILLI_NODE_RMSNORM_NODE_H

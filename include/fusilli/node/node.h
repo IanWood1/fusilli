@@ -37,6 +37,7 @@ public:
     LayerNorm,
     BatchNorm,
     RmsNorm,
+    RmsNormBwd,
     Matmul,
     Reduction,
     Custom,

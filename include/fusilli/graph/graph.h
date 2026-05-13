@@ -47,6 +47,7 @@
 #include "fusilli/support/extras.h"
 #include "fusilli/support/logging.h"
 
+#include <array>
 #include <cstdlib>
 #include <filesystem>
 #include <memory>
@@ -360,6 +361,12 @@ public:
   std::array<std::shared_ptr<TensorAttr>, 2>
   rmsnorm(const std::shared_ptr<TensorAttr> &x,
           const std::shared_ptr<TensorAttr> &scale, RmsnormAttr &attributes);
+  std::array<std::shared_ptr<TensorAttr>, 2>
+  rmsnormBwd(const std::shared_ptr<TensorAttr> &dy,
+             const std::shared_ptr<TensorAttr> &x,
+             const std::shared_ptr<TensorAttr> &scale,
+             const std::shared_ptr<TensorAttr> &invRms,
+             RmsnormBwdAttr &attributes);
   std::shared_ptr<TensorAttr> matmul(const std::shared_ptr<TensorAttr> &a,
                                      const std::shared_ptr<TensorAttr> &b,
                                      MatmulAttr &attributes);
@@ -991,6 +998,45 @@ Graph::rmsnorm(const std::shared_ptr<TensorAttr> &x,
       std::make_unique<RmsNormNode>(std::move(rmsnormAttr), context));
 
   return {std::move(y), std::move(r)};
+}
+
+// Create a RmsNormBwdNode, populate it with the specified attributes, create
+// output tensors and add the node to the graph's sub nodes.
+inline std::array<std::shared_ptr<TensorAttr>, 2> Graph::rmsnormBwd(
+    const std::shared_ptr<TensorAttr> &dy, const std::shared_ptr<TensorAttr> &x,
+    const std::shared_ptr<TensorAttr> &scale,
+    const std::shared_ptr<TensorAttr> &invRms, RmsnormBwdAttr &rmsnormBwdAttr) {
+  // Populate names when not set.
+  if (rmsnormBwdAttr.getName().empty())
+    rmsnormBwdAttr.setName("rmsnorm_bwd_" + std::to_string(subNodes_.size()));
+  if (dy && dy->getName().empty())
+    dy->setName(rmsnormBwdAttr.getName() + "_DY");
+  if (x && x->getName().empty())
+    x->setName(rmsnormBwdAttr.getName() + "_X");
+  if (scale && scale->getName().empty())
+    scale->setName(rmsnormBwdAttr.getName() + "_SCALE");
+  if (invRms && invRms->getName().empty())
+    invRms->setName(rmsnormBwdAttr.getName() + "_INV_RMS");
+
+  FUSILLI_LOG_LABEL_ENDL("INFO: Adding RmsNormBwd '" << rmsnormBwdAttr.getName()
+                                                     << "' to Graph");
+
+  // Set inputs.
+  rmsnormBwdAttr.setDY(dy).setX(x).setSCALE(scale).setINV_RMS(invRms);
+
+  // Set outputs.
+  std::shared_ptr<TensorAttr> dx =
+      outputTensor(rmsnormBwdAttr.getName() + "_DX");
+  std::shared_ptr<TensorAttr> dscale =
+      outputTensor(rmsnormBwdAttr.getName() + "_DSCALE");
+  rmsnormBwdAttr.setDX(dx);
+  rmsnormBwdAttr.setDSCALE(dscale);
+
+  // Create node and add to Graph's subNodes_.
+  subNodes_.emplace_back(
+      std::make_unique<RmsNormBwdNode>(std::move(rmsnormBwdAttr), context));
+
+  return {std::move(dx), std::move(dscale)};
 }
 
 // Create a MatmulNode, populate it with the specified attributes, create

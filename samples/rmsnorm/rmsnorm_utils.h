@@ -89,6 +89,46 @@ generateIOTensorsForTrainForward(int64_t n, int64_t c, int64_t h, int64_t w,
   return std::make_tuple(inputVals, expectedVals, expectedInvRms);
 }
 
+// Generates inputs and expected outputs for RMSNorm backward in NCHW order.
+// Returns: X, SCALE, INV_RMS, DY, expected DX, expected DSCALE.
+inline std::tuple<std::vector<float>, std::vector<float>, std::vector<float>,
+                  std::vector<float>, std::vector<float>, std::vector<float>>
+generateIOTensorsForBackward(int64_t n, int64_t c, int64_t h, int64_t w,
+                             float scale, float eps) {
+  auto trainForwardVals =
+      generateIOTensorsForTrainForward(n, c, h, w, scale, eps);
+  std::vector<float> inputVals = std::get<0>(trainForwardVals);
+  std::vector<float> invRmsVals = std::get<2>(trainForwardVals);
+
+  const int64_t sampleSize = c * h * w;
+  const size_t inputSize = n * sampleSize;
+  std::vector<float> scaleVals(sampleSize, scale);
+  std::vector<float> dyVals(inputSize, 1.0f);
+  std::vector<float> expectedDX(inputSize, 0.0f);
+  std::vector<float> expectedDScale(sampleSize, 0.0f);
+
+  for (int64_t b = 0; b < n; ++b) {
+    const float invRms = invRmsVals[b];
+    float dot = 0.0f;
+    for (int64_t i = 0; i < sampleSize; ++i) {
+      const int64_t inputIdx = b * sampleSize + i;
+      dot += dyVals[inputIdx] * scaleVals[i] * inputVals[inputIdx];
+    }
+
+    const float meanDot = dot / static_cast<float>(sampleSize);
+    for (int64_t i = 0; i < sampleSize; ++i) {
+      const int64_t inputIdx = b * sampleSize + i;
+      const float x = inputVals[inputIdx];
+      expectedDX[inputIdx] = invRms * (dyVals[inputIdx] * scaleVals[i] -
+                                       x * invRms * invRms * meanDot);
+      expectedDScale[i] += dyVals[inputIdx] * x * invRms;
+    }
+  }
+
+  return std::make_tuple(inputVals, scaleVals, invRmsVals, dyVals, expectedDX,
+                         expectedDScale);
+}
+
 } // namespace fusilli::rmsnorm_utils
 
 #endif // FUSILLI_SAMPLES_RMSNORM_RMSNORM_UTILS_H

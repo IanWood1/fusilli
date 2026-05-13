@@ -99,6 +99,7 @@ add_fusilli_samples(
 add_fusilli_samples(
   PREFIX fusilli_rmsnorm_samples
   SRCS
+    rmsnorm/rmsnorm_bwd_nchw_scale.cpp
     rmsnorm/rmsnorm_infer_nchw.cpp
     rmsnorm/rmsnorm_infer_nchw_scale.cpp
     rmsnorm/rmsnorm_infer_nhwc_scale.cpp

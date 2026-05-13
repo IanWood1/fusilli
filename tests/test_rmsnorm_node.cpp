@@ -34,6 +34,24 @@ TEST_CASE("RmsNormNode getType returns correct type", "[rmsnorm_node]") {
   REQUIRE(node.getType() == INode::Type::RmsNorm);
 }
 
+TEST_CASE("RmsNormBwdNode getName correctly propagates the attribute name",
+          "[rmsnorm_bwd_node]") {
+  Context ctx;
+  RmsnormBwdAttr attr;
+  attr.setName("foo_rmsnorm_bwd");
+
+  RmsNormBwdNode node(std::move(attr), ctx);
+  REQUIRE(node.getName() == "foo_rmsnorm_bwd");
+}
+
+TEST_CASE("RmsNormBwdNode getType returns correct type", "[rmsnorm_bwd_node]") {
+  Context ctx;
+  RmsnormBwdAttr attr;
+
+  RmsNormBwdNode node(std::move(attr), ctx);
+  REQUIRE(node.getType() == INode::Type::RmsNormBwd);
+}
+
 TEST_CASE("RmsNormNode preValidateNode detects missing attributes",
           "[rmsnorm_node]") {
   Context ctx;
@@ -177,6 +195,76 @@ TEST_CASE("RmsNormNode preValidateNode detects missing attributes",
   }
 }
 
+TEST_CASE("RmsNormBwdNode preValidateNode detects missing attributes",
+          "[rmsnorm_bwd_node]") {
+  Context ctx;
+  RmsnormBwdAttr attr;
+
+  SECTION("Input DY missing") {
+    RmsNormBwdNode node(std::move(attr), ctx);
+
+    auto status = node.preValidateNode();
+    REQUIRE(isError(status));
+    REQUIRE(status.getCode() == ErrorCode::AttributeNotSet);
+    REQUIRE(status.getMessage() == "RmsNormBwd input tensor DY not set");
+  }
+
+  SECTION("Input X missing") {
+    attr.setDY(std::make_shared<TensorAttr>(
+        TensorAttr().setDim({2, 3}).setStride({3, 1})));
+    RmsNormBwdNode node(std::move(attr), ctx);
+
+    auto status = node.preValidateNode();
+    REQUIRE(isError(status));
+    REQUIRE(status.getCode() == ErrorCode::AttributeNotSet);
+    REQUIRE(status.getMessage() == "RmsNormBwd input tensor X not set");
+  }
+
+  SECTION("Input SCALE missing") {
+    attr.setDY(std::make_shared<TensorAttr>(
+        TensorAttr().setDim({2, 3}).setStride({3, 1})));
+    attr.setX(std::make_shared<TensorAttr>(
+        TensorAttr().setDim({2, 3}).setStride({3, 1})));
+    RmsNormBwdNode node(std::move(attr), ctx);
+
+    auto status = node.preValidateNode();
+    REQUIRE(isError(status));
+    REQUIRE(status.getCode() == ErrorCode::AttributeNotSet);
+    REQUIRE(status.getMessage() == "RmsNormBwd input tensor SCALE not set");
+  }
+
+  SECTION("Input INV_RMS missing") {
+    attr.setDY(std::make_shared<TensorAttr>(
+        TensorAttr().setDim({2, 3}).setStride({3, 1})));
+    attr.setX(std::make_shared<TensorAttr>(
+        TensorAttr().setDim({2, 3}).setStride({3, 1})));
+    attr.setSCALE(std::make_shared<TensorAttr>(
+        TensorAttr().setDim({1, 3}).setStride({3, 1})));
+    RmsNormBwdNode node(std::move(attr), ctx);
+
+    auto status = node.preValidateNode();
+    REQUIRE(isError(status));
+    REQUIRE(status.getCode() == ErrorCode::AttributeNotSet);
+    REQUIRE(status.getMessage() == "RmsNormBwd input tensor INV_RMS not set");
+  }
+
+  SECTION("All required attributes present") {
+    attr.setDY(std::make_shared<TensorAttr>(
+        TensorAttr().setDim({2, 3}).setStride({3, 1})));
+    attr.setX(std::make_shared<TensorAttr>(
+        TensorAttr().setDim({2, 3}).setStride({3, 1})));
+    attr.setSCALE(std::make_shared<TensorAttr>(
+        TensorAttr().setDim({1, 3}).setStride({3, 1})));
+    attr.setINV_RMS(std::make_shared<TensorAttr>(
+        TensorAttr().setDim({2, 1}).setStride({1, 1})));
+    attr.setDX(std::make_shared<TensorAttr>());
+    attr.setDSCALE(std::make_shared<TensorAttr>());
+    RmsNormBwdNode node(std::move(attr), ctx);
+
+    FUSILLI_REQUIRE_OK(node.preValidateNode());
+  }
+}
+
 TEST_CASE(
     "RmsNormNode inferPropertiesNode when output tensors are fully specified",
     "[rmsnorm_node]") {
@@ -282,6 +370,134 @@ TEST_CASE("RmsNormNode inferPropertiesNode when SCALE tensor is unspecified",
     auto sT = node.rmsnormAttr.getSCALE();
     REQUIRE(sT->getDim() == std::vector<int64_t>{1, c, d});
     REQUIRE(sT->getStride() == std::vector<int64_t>{c * d, 1, c});
+  }
+}
+
+TEST_CASE("RmsNormBwdNode inferPropertiesNode infers gradient tensor "
+          "properties",
+          "[rmsnorm_bwd_node]") {
+  Context ctx;
+  RmsnormBwdAttr attr;
+
+  int64_t n = 2, c = 3, d = 4;
+  attr.setDY(std::make_shared<TensorAttr>(
+      TensorAttr().setDim({n, c, d}).setStride({c * d, d, 1})));
+  attr.setX(std::make_shared<TensorAttr>(
+      TensorAttr().setDim({n, c, d}).setStride({c * d, d, 1})));
+  attr.setSCALE(std::make_shared<TensorAttr>());
+  attr.setINV_RMS(std::make_shared<TensorAttr>());
+  attr.setDX(std::make_shared<TensorAttr>());
+  attr.setDSCALE(std::make_shared<TensorAttr>());
+
+  RmsNormBwdNode node(std::move(attr), ctx);
+  FUSILLI_REQUIRE_OK(node.inferPropertiesNode());
+
+  auto scaleT = node.rmsnormBwdAttr.getSCALE();
+  auto invRmsT = node.rmsnormBwdAttr.getINV_RMS();
+  auto dxT = node.rmsnormBwdAttr.getDX();
+  auto dscaleT = node.rmsnormBwdAttr.getDSCALE();
+
+  REQUIRE(scaleT->getDim() == std::vector<int64_t>{1, c, d});
+  REQUIRE(scaleT->getStride() == std::vector<int64_t>{c * d, d, 1});
+  REQUIRE(invRmsT->getDim() == std::vector<int64_t>{n, 1, 1});
+  REQUIRE(invRmsT->getStride() == std::vector<int64_t>{1, 1, 1});
+  REQUIRE(dxT->getDim() == std::vector<int64_t>{n, c, d});
+  REQUIRE(dxT->getStride() == std::vector<int64_t>{c * d, d, 1});
+  REQUIRE(dscaleT->getDim() == std::vector<int64_t>{1, c, d});
+  REQUIRE(dscaleT->getStride() == std::vector<int64_t>{c * d, d, 1});
+}
+
+TEST_CASE("RmsNormBwdNode shape checks", "[rmsnorm_bwd_node]") {
+  Context ctx;
+  RmsnormBwdAttr attr;
+
+  int64_t n = 2, c = 3, d = 4;
+  attr.setDY(std::make_shared<TensorAttr>(
+      TensorAttr().setDim({n, c, d}).setStride({c * d, d, 1})));
+  attr.setX(std::make_shared<TensorAttr>(
+      TensorAttr().setDim({n, c, d}).setStride({c * d, d, 1})));
+  attr.setINV_RMS(std::make_shared<TensorAttr>(
+      TensorAttr().setDim({n, 1, 1}).setStride({1, 1, 1})));
+  attr.setDX(std::make_shared<TensorAttr>());
+  attr.setDSCALE(std::make_shared<TensorAttr>());
+
+  SECTION("Incorrect SCALE shape") {
+    attr.setSCALE(std::make_shared<TensorAttr>(
+        TensorAttr().setDim({n, c, d}).setStride({c * d, d, 1})));
+    RmsNormBwdNode node(std::move(attr), ctx);
+
+    auto status = node.preValidateNode();
+    REQUIRE(isError(status));
+    REQUIRE(status.getCode() == ErrorCode::InvalidAttribute);
+    REQUIRE(status.getMessage() ==
+            "RmsNormBwd input tensor SCALE must have shape as tensor X with "
+            "single batch");
+  }
+
+  SECTION("Incorrect INV_RMS shape") {
+    attr.setSCALE(std::make_shared<TensorAttr>(
+        TensorAttr().setDim({1, c, d}).setStride({c * d, d, 1})));
+    attr.setINV_RMS(std::make_shared<TensorAttr>(
+        TensorAttr().setDim({1, 1, 1}).setStride({1, 1, 1})));
+    RmsNormBwdNode node(std::move(attr), ctx);
+
+    auto status = node.preValidateNode();
+    REQUIRE(isError(status));
+    REQUIRE(status.getCode() == ErrorCode::InvalidAttribute);
+    REQUIRE(status.getMessage() ==
+            "RmsNormBwd input tensor INV_RMS must have shape [B, 1, ..., 1] "
+            "with rank equal to input X tensor's rank, and batch dimension "
+            "equal to input X tensor's batch dimension");
+  }
+}
+
+TEST_CASE("RmsNormBwdNode postValidateNode detects incorrect output shapes",
+          "[rmsnorm_bwd_node]") {
+  Context ctx;
+  RmsnormBwdAttr attr;
+
+  int64_t n = 2, c = 3, d = 4;
+  attr.setDY(std::make_shared<TensorAttr>(
+      TensorAttr().setDim({n, c, d}).setStride({c * d, d, 1})));
+  attr.setX(std::make_shared<TensorAttr>(
+      TensorAttr().setDim({n, c, d}).setStride({c * d, d, 1})));
+  attr.setSCALE(std::make_shared<TensorAttr>(
+      TensorAttr().setDim({1, c, d}).setStride({c * d, d, 1})));
+  attr.setINV_RMS(std::make_shared<TensorAttr>(
+      TensorAttr().setDim({n, 1, 1}).setStride({1, 1, 1})));
+
+  SECTION("DX has incorrect shape") {
+    attr.setDX(std::make_shared<TensorAttr>(
+        TensorAttr().setDim({n + 1, c, d}).setStride({c * d, d, 1})));
+    attr.setDSCALE(std::make_shared<TensorAttr>(
+        TensorAttr().setDim({1, c, d}).setStride({c * d, d, 1})));
+    RmsNormBwdNode node(std::move(attr), ctx);
+
+    FUSILLI_REQUIRE_OK(node.preValidateNode());
+    FUSILLI_REQUIRE_OK(node.inferPropertiesNode());
+    auto status = node.postValidateNode();
+    REQUIRE(isError(status));
+    REQUIRE(status.getCode() == ErrorCode::InvalidAttribute);
+    REQUIRE(status.getMessage() ==
+            "RmsNormBwd output DX tensor must have the same shape as input X "
+            "tensor");
+  }
+
+  SECTION("DSCALE has incorrect shape") {
+    attr.setDX(std::make_shared<TensorAttr>(
+        TensorAttr().setDim({n, c, d}).setStride({c * d, d, 1})));
+    attr.setDSCALE(std::make_shared<TensorAttr>(
+        TensorAttr().setDim({c, d}).setStride({d, 1})));
+    RmsNormBwdNode node(std::move(attr), ctx);
+
+    FUSILLI_REQUIRE_OK(node.preValidateNode());
+    FUSILLI_REQUIRE_OK(node.inferPropertiesNode());
+    auto status = node.postValidateNode();
+    REQUIRE(isError(status));
+    REQUIRE(status.getCode() == ErrorCode::InvalidAttribute);
+    REQUIRE(status.getMessage() ==
+            "RmsNormBwd output DSCALE tensor must have the same shape as input "
+            "SCALE tensor");
   }
 }
 

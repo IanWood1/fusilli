@@ -1586,6 +1586,166 @@ inline std::string RmsNormNode::emitNodePreAsm() const {
 
 //===----------------------------------------------------------------------===//
 //
+// RmsNormBwdNode ASM Emitter Methods
+//
+//===----------------------------------------------------------------------===//
+
+inline std::string RmsNormBwdNode::getOperandNamesAsm() const {
+  std::ostringstream oss;
+  std::string suffix = rmsnormBwdAttr.getName();
+
+  oss << rmsnormBwdAttr.getDY()->getValueNameAsm() << "_" << suffix
+      << "_perm, ";
+  oss << rmsnormBwdAttr.getX()->getValueNameAsm() << "_" << suffix << "_perm, ";
+  oss << rmsnormBwdAttr.getSCALE()->getValueNameAsm() << "_" << suffix
+      << "_perm, ";
+  oss << rmsnormBwdAttr.getINV_RMS()->getValueNameAsm() << "_" << suffix
+      << "_perm";
+
+  return oss.str();
+}
+
+inline std::string RmsNormBwdNode::getOperandTypesAsm() const {
+  std::ostringstream oss;
+
+  oss << rmsnormBwdAttr.getDY()->getTensorTypeAsm(/*isValueTensor=*/true,
+                                                  /*useLogicalDims=*/true)
+      << ", ";
+  oss << rmsnormBwdAttr.getX()->getTensorTypeAsm(/*isValueTensor=*/true,
+                                                 /*useLogicalDims=*/true)
+      << ", ";
+  oss << rmsnormBwdAttr.getSCALE()->getTensorTypeAsm(/*isValueTensor=*/true,
+                                                     /*useLogicalDims=*/true)
+      << ", ";
+  oss << rmsnormBwdAttr.getINV_RMS()->getTensorTypeAsm(
+      /*isValueTensor=*/true,
+      /*useLogicalDims=*/true);
+
+  return oss.str();
+}
+
+inline std::string RmsNormBwdNode::getResultNamesAsm() const {
+  std::ostringstream oss;
+  std::string suffix = rmsnormBwdAttr.getName();
+
+  oss << rmsnormBwdAttr.getDX()->getValueNameAsm() << "_" << suffix << "_perm, "
+      << rmsnormBwdAttr.getDSCALE()->getValueNameAsm() << "_" << suffix
+      << "_perm";
+
+  return oss.str();
+}
+
+inline std::string RmsNormBwdNode::getResultTypesAsm() const {
+  std::ostringstream oss;
+
+  oss << rmsnormBwdAttr.getDX()->getTensorTypeAsm(/*isValueTensor=*/true,
+                                                  /*useLogicalDims=*/true)
+      << ", ";
+  oss << rmsnormBwdAttr.getDSCALE()->getTensorTypeAsm(/*isValueTensor=*/true,
+                                                      /*useLogicalDims=*/true);
+
+  return oss.str();
+}
+
+inline std::string RmsNormBwdNode::getNormalizedReduceDimOpsAsm() const {
+  return getListOfIntOpsAsm(getNormalizedAxes(),
+                            /*prefix=*/"normalized_reduce_dims",
+                            /*suffix=*/rmsnormBwdAttr.getName());
+}
+
+inline std::string RmsNormBwdNode::getBatchReduceDimOpsAsm() const {
+  return getListOfIntOpsAsm(getBatchReduceAxes(),
+                            /*prefix=*/"batch_reduce_dims",
+                            /*suffix=*/rmsnormBwdAttr.getName());
+}
+
+inline std::string RmsNormBwdNode::emitNodePreAsm() const {
+  std::string suffix = rmsnormBwdAttr.getName();
+
+  std::string permuteDY = getLayoutConversionOpsAsm(
+      rmsnormBwdAttr.getDY(), "permute_dy", suffix, /*isInput=*/true);
+  std::string permuteX = getLayoutConversionOpsAsm(
+      rmsnormBwdAttr.getX(), "permute_x", suffix, /*isInput=*/true);
+  std::string permuteScale = getLayoutConversionOpsAsm(
+      rmsnormBwdAttr.getSCALE(), "permute_scale", suffix, /*isInput=*/true);
+  std::string permuteInvRms = getLayoutConversionOpsAsm(
+      rmsnormBwdAttr.getINV_RMS(), "permute_inv_rms", suffix,
+      /*isInput=*/true);
+  std::string permuteDX = getLayoutConversionOpsAsm(
+      rmsnormBwdAttr.getDX(), "permute_dx", suffix, /*isInput=*/false);
+  std::string permuteDScale = getLayoutConversionOpsAsm(
+      rmsnormBwdAttr.getDSCALE(), "permute_dscale", suffix, /*isInput=*/false);
+
+  std::string xType = rmsnormBwdAttr.getX()->getTensorTypeAsm(
+      /*isValueTensor=*/true, /*useLogicalDims=*/true);
+  std::string scaleType = rmsnormBwdAttr.getSCALE()->getTensorTypeAsm(
+      /*isValueTensor=*/true, /*useLogicalDims=*/true);
+  std::string invRmsType = rmsnormBwdAttr.getINV_RMS()->getTensorTypeAsm(
+      /*isValueTensor=*/true, /*useLogicalDims=*/true);
+  std::string dxType = rmsnormBwdAttr.getDX()->getTensorTypeAsm(
+      /*isValueTensor=*/true, /*useLogicalDims=*/true);
+  std::string dscaleType = rmsnormBwdAttr.getDSCALE()->getTensorTypeAsm(
+      /*isValueTensor=*/true, /*useLogicalDims=*/true);
+
+  constexpr std::string_view schema = R"(
+    {1}
+    {2}
+    %keepdim_{0} = torch.constant.bool true
+    %none_dtype_{0} = torch.constant.none
+    %one_{0} = torch.constant.int 1
+    %normalized_size_{0} = torch.constant.int {3}
+    {4}
+    {5}
+    {6}
+    {7}
+    %scaled_dy_{0} = torch.aten.mul.Tensor {8}, {9} : {10}, {11} -> {10}
+    %dy_scaled_x_{0} = torch.aten.mul.Tensor %scaled_dy_{0}, {12} : {10}, {10} -> {10}
+    %dot_sum_{0} = torch.aten.sum.dim_IntList %dy_scaled_x_{0}, %normalized_reduce_dims_{0}, %keepdim_{0}, %none_dtype_{0} : {10}, !torch.list<int>, !torch.bool, !torch.none -> {13}
+    %mean_dot_{0} = torch.aten.div.Scalar %dot_sum_{0}, %normalized_size_{0} : {13}, !torch.int -> {13}
+    %inv_rms_sq_{0} = torch.aten.mul.Tensor {14}, {14} : {13}, {13} -> {13}
+    %correction_factor_{0} = torch.aten.mul.Tensor %mean_dot_{0}, %inv_rms_sq_{0} : {13}, {13} -> {13}
+    %x_correction_{0} = torch.aten.mul.Tensor {12}, %correction_factor_{0} : {10}, {13} -> {10}
+    %dx_base_{0} = torch.aten.sub.Tensor %scaled_dy_{0}, %x_correction_{0}, %one_{0} : {10}, {10}, !torch.int -> {10}
+    {15} = torch.aten.mul.Tensor %dx_base_{0}, {14} : {10}, {13} -> {16}
+    %x_inv_rms_{0} = torch.aten.mul.Tensor {12}, {14} : {10}, {13} -> {10}
+    %dscale_full_{0} = torch.aten.mul.Tensor {8}, %x_inv_rms_{0} : {10}, {10} -> {10}
+    {17} = torch.aten.sum.dim_IntList %dscale_full_{0}, %batch_reduce_dims_{0}, %keepdim_{0}, %none_dtype_{0} : {10}, !torch.list<int>, !torch.bool, !torch.none -> {18}
+    {19}
+    {20}
+  )";
+
+  return std::format(
+      schema,
+      suffix,                                                             // {0}
+      getNormalizedReduceDimOpsAsm(),                                     // {1}
+      getBatchReduceDimOpsAsm(),                                          // {2}
+      getNormalizedElementCount(),                                        // {3}
+      permuteDY,                                                          // {4}
+      permuteX,                                                           // {5}
+      permuteScale,                                                       // {6}
+      permuteInvRms,                                                      // {7}
+      rmsnormBwdAttr.getDY()->getValueNameAsm() + "_" + suffix + "_perm", // {8}
+      rmsnormBwdAttr.getSCALE()->getValueNameAsm() + "_" + suffix +
+          "_perm",                                                       // {9}
+      xType,                                                             // {10}
+      scaleType,                                                         // {11}
+      rmsnormBwdAttr.getX()->getValueNameAsm() + "_" + suffix + "_perm", // {12}
+      invRmsType,                                                        // {13}
+      rmsnormBwdAttr.getINV_RMS()->getValueNameAsm() + "_" + suffix +
+          "_perm", // {14}
+      rmsnormBwdAttr.getDX()->getValueNameAsm() + "_" + suffix +
+          "_perm", // {15}
+      dxType,      // {16}
+      rmsnormBwdAttr.getDSCALE()->getValueNameAsm() + "_" + suffix +
+          "_perm",  // {17}
+      dscaleType,   // {18}
+      permuteDX,    // {19}
+      permuteDScale // {20}
+  );
+}
+
+//===----------------------------------------------------------------------===//
+//
 // MatmulNode ASM Emitter Methods
 //
 //===----------------------------------------------------------------------===//
